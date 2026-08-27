@@ -1,0 +1,23 @@
+	Command being timed: "./build/openfhe_lab_compare --dataset all --refresh both --epochs 4 --learning-rate 0.01 --output results/benchmark_packed.csv"
+	User time (seconds): 1192.35
+	System time (seconds): 11.97
+	Percent of CPU this job got: 1275%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:34.38
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 764100
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 70
+	Minor (reclaiming a frame) page faults: 2151866
+	Voluntary context switches: 50725
+	Involuntary context switches: 8803
+	Swaps: 0
+	File system inputs: 10912
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

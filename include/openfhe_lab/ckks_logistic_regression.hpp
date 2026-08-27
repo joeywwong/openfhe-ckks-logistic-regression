@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -20,9 +22,11 @@ enum class RefreshMethod {
 std::string RefreshMethodName(RefreshMethod method);
 
 struct CkksConfiguration {
-    // Nine Framingham features require at least nine active slots. Sixteen is
-    // the next sparse power-of-two slot count supported by the bootstrap setup.
-    std::uint32_t slots{16};
+    // Full data packing in the existing 4096-degree demo ring. The periodic
+    // weight/bias vectors still use the original 16-slot sparse bootstrap.
+    std::uint32_t slots{2048};
+    std::uint32_t rowWidth{16};
+    std::uint32_t bootstrapSlots{16};
     std::vector<std::uint32_t> levelBudget{3, 3};
     std::uint32_t levelsAvailableAfterBootstrap{10};
 };
@@ -32,18 +36,29 @@ struct FheRuntime {
     lbcrypto::KeyPair<lbcrypto::DCRTPoly> keyPair;
     std::uint32_t multiplicativeDepth{};
     std::uint32_t slots{};
+    std::uint32_t rowWidth{};
+    std::uint32_t bootstrapSlots{};
+    std::shared_ptr<std::map<std::uint32_t, lbcrypto::EvalKey<lbcrypto::DCRTPoly>>> sumRowsKeys;
+    std::shared_ptr<std::map<std::uint32_t, lbcrypto::EvalKey<lbcrypto::DCRTPoly>>> sumColsKeys;
     // EvalBootstrap in OpenFHE 1.1.2 returns the original ciphertext when it
     // still has at least as many towers as bootstrapping would return. A model
     // must be beyond this consumed level for refresh to be genuine.
     std::uint32_t bootstrapTriggerLevel{};
 };
 
-struct EncryptedSample {
+struct EncryptedBlock {
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> features;
-    lbcrypto::Ciphertext<lbcrypto::DCRTPoly> label;
+    lbcrypto::Ciphertext<lbcrypto::DCRTPoly> labels;
+    // Public row occupancy only; no feature/label values are exposed.
+    lbcrypto::Plaintext validRows;
+    std::size_t sampleCount{};
 };
 
-using EncryptedDataset = std::vector<EncryptedSample>;
+struct EncryptedDataset {
+    std::vector<EncryptedBlock> blocks;
+    std::size_t sampleCount{};
+    std::size_t featureCount{};
+};
 
 struct EncryptedModel {
     // The lab encrypted weights and bias separately. This project deliberately

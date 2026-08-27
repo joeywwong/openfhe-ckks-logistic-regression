@@ -1,0 +1,42 @@
+OpenFHE port of the TenSEAL encrypted logistic-regression lab
+Fixed lab settings: shuffled 70/30 split, seed 4, cubic sigmoid, full-batch GD
+Epochs: 4, learning rate: 0.01
+Result CSV: results/benchmark_packed.csv
+
+Dataset: LogReg_sample_dataset
+  1000 samples, 2 features, 700 train / 300 test
+  plaintext final: accuracy 0.996667, loss 0.656384
+  OpenFHE setup: 5.17472 s; ring dimension 4096, slots 2048, row width 2, bootstrap slots 16, multiplicative depth 29
+  packed 700 training samples into 1 blocks (2 ciphertexts; 1024 rows/block) in 0.206536 s
+  Method: simulated_bootstrapping
+    epoch 1/4: encrypted training; decrypt + encrypt done; epoch 2.568 s, refresh 0.082 s, accuracy 0.996667, loss 0.683684, consumed level 6 -> 0
+    epoch 2/4: encrypted training; decrypt + encrypt done; epoch 1.295 s, refresh 0.093 s, accuracy 0.996667, loss 0.674404, consumed level 6 -> 0
+    epoch 3/4: encrypted training; decrypt + encrypt done; epoch 1.281 s, refresh 0.085 s, accuracy 0.996667, loss 0.665305, consumed level 6 -> 0
+    epoch 4/4: encrypted training; decrypt + encrypt done; epoch 1.290 s, refresh 0.082 s, accuracy 0.996667, loss 0.656384, consumed level 6 -> 0
+    final accuracy 0.996667, loss 0.656384, mean refresh 0.085560 s, max model error 8.645656e-14
+  Method: real_bootstrapping
+    epoch 1/4: encrypted training; bootstrap deferred done; epoch 1.208 s, refresh 0.000 s, accuracy 0.996667, loss 0.683684, consumed level 6 -> 6
+    epoch 2/4: encrypted training; bootstrap deferred done; epoch 1.042 s, refresh 0.000 s, accuracy 0.996667, loss 0.674404, consumed level 13 -> 13
+    epoch 3/4: encrypted training; EvalBootstrap done; epoch 4.419 s, refresh 4.034 s (paired decrypt+encrypt 0.064 s), accuracy 0.996667, loss 0.665305, consumed level 20 -> 19
+    epoch 4/4: encrypted training; EvalBootstrap done; epoch 4.729 s, refresh 4.080 s (paired decrypt+encrypt 0.044 s), accuracy 0.996667, loss 0.656383, consumed level 26 -> 19
+    final accuracy 0.996667, loss 0.656383, mean refresh 4.056956 s, max model error 7.271228e-07
+
+Dataset: framingham
+  1114 samples, 9 features, 780 train / 334 test
+  plaintext final: accuracy 0.688623, loss 0.690018
+  OpenFHE setup: 2.64404 s; ring dimension 4096, slots 2048, row width 16, bootstrap slots 16, multiplicative depth 29
+  packed 780 training samples into 7 blocks (14 ciphertexts; 128 rows/block) in 0.32043 s
+  Method: simulated_bootstrapping
+    epoch 1/4: encrypted training; decrypt + encrypt done; epoch 8.005 s, refresh 0.087 s, accuracy 0.688623, loss 0.692355, consumed level 6 -> 0
+    epoch 2/4: encrypted training; decrypt + encrypt done; epoch 7.854 s, refresh 0.089 s, accuracy 0.688623, loss 0.691569, consumed level 6 -> 0
+    epoch 3/4: encrypted training; decrypt + encrypt done; epoch 8.864 s, refresh 0.093 s, accuracy 0.688623, loss 0.690790, consumed level 6 -> 0
+    epoch 4/4: encrypted training; decrypt + encrypt done; epoch 8.563 s, refresh 0.098 s, accuracy 0.688623, loss 0.690018, consumed level 6 -> 0
+    final accuracy 0.688623, loss 0.690018, mean refresh 0.091832 s, max model error 8.839153e-14
+  Method: real_bootstrapping
+    epoch 1/4: encrypted training; bootstrap deferred done; epoch 8.430 s, refresh 0.000 s, accuracy 0.688623, loss 0.692355, consumed level 6 -> 6
+    epoch 2/4: encrypted training; bootstrap deferred done; epoch 7.222 s, refresh 0.000 s, accuracy 0.688623, loss 0.691569, consumed level 13 -> 13
+    epoch 3/4: encrypted training; EvalBootstrap done; epoch 10.548 s, refresh 5.477 s (paired decrypt+encrypt 0.070 s), accuracy 0.688623, loss 0.690790, consumed level 20 -> 19
+    epoch 4/4: encrypted training; EvalBootstrap done; epoch 7.729 s, refresh 4.115 s (paired decrypt+encrypt 0.053 s), accuracy 0.688623, loss 0.690018, consumed level 26 -> 19
+    final accuracy 0.688623, loss 0.690018, mean refresh 4.796196 s, max model error 3.617679e-07
+
+Benchmark complete. Per-epoch measurements written to results/benchmark_packed.csv

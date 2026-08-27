@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EPOCHS="${EPOCHS:-100}"
+OUTPUT_PATH="${OUTPUT_PATH:-${PROJECT_DIR}/results/benchmark_packed.csv}"
 cd "${PROJECT_DIR}"
 
 "${PROJECT_DIR}/scripts/build_and_test_wsl.sh"
@@ -11,4 +12,4 @@ cd "${PROJECT_DIR}"
   --refresh both \
   --epochs "${EPOCHS}" \
   --learning-rate 0.01 \
-  --output "${PROJECT_DIR}/results/benchmark.csv"
+  --output "${OUTPUT_PATH}"

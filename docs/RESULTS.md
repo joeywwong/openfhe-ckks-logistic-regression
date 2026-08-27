@@ -1,8 +1,13 @@
 # Measured comparison
 
-These values were measured on the complete lab datasets, without subsampling or
-sample packing. Raw values with additional precision are in
-`results/benchmark.csv`.
+> Historical **unpacked** implementation. For the sample-packing update and
+> new four-epoch measurements, see [PACKED_RESULTS.md](PACKED_RESULTS.md).
+
+These historical values were measured on the complete lab datasets, without
+subsampling or sample packing. The current `results/benchmark.csv` contains a
+later Framingham-only four-epoch run, not the complete raw data for the original
+tables below. That CSV was preserved during the packing update; its comparison
+with the new run is documented in [PACKED_RESULTS.md](PACKED_RESULTS.md).
 
 The executable retains the lab default of 100 epochs. The checked-in benchmark
 uses four real-mode epochs—the first point at which OpenFHE 1.1.2 genuinely
@@ -14,7 +19,7 @@ one-ciphertext-per-record design takes several minutes per epoch.
 
 | Item | Value |
 |---|---|
-| Date | 2026-08-26 (Asia/Shanghai) |
+| Date | 2026-08-26 |
 | OS | Ubuntu 22.04.4 LTS under WSL2 |
 | CPU | AMD Ryzen 7 7735U, 8 cores / 16 threads |
 | WSL memory | 7.4 GiB plus 2.0 GiB swap |

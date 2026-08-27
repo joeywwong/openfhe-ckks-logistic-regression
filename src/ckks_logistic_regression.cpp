@@ -1,4 +1,9 @@
+// Packed matrix-vector reductions adapted from enc_matrix.h in
+// openfheorg/openfhe-logreg-training-examples (BSD-2-Clause).
+// Copyright (c) 2023, Duality Technologies Inc. All rights reserved.
+// See THIRD_PARTY_NOTICES.md for the retained upstream license.
 #include "openfhe_lab/ckks_logistic_regression.hpp"
+#include "openfhe_lab/sample_packing.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -34,11 +39,14 @@ std::vector<double> DecryptVector(
 }
 
 EncryptedModel EncryptModel(const FheRuntime& runtime, const labml::PlainModel& model) {
-    if (model.weights.size() > runtime.slots) {
-        throw std::invalid_argument("Model weights do not fit in the configured CKKS slots");
+    if (model.weights.size() > runtime.rowWidth) {
+        throw std::invalid_argument("Model weights do not fit in the packed row width");
     }
     std::vector<double> packedWeights(runtime.slots, 0.0);
-    std::copy(model.weights.begin(), model.weights.end(), packedWeights.begin());
+    // Row-cloned weights: [w0,w1,...,padding] repeated once per sample row.
+    for (std::size_t offset = 0; offset < runtime.slots; offset += runtime.rowWidth) {
+        std::copy(model.weights.begin(), model.weights.end(), packedWeights.begin() + offset);
+    }
     const std::vector<double> packedBias(runtime.slots, model.bias);
 
     auto weightsPlaintext = runtime.context->MakeCKKSPackedPlaintext(
@@ -81,26 +89,40 @@ EncryptedModel TrainOneEpoch(
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> biasGradientSum;
     bool hasGradient = false;
 
-    for (const auto& sample : encryptedTrain) {
-        const auto coordinateProducts = runtime.context->EvalMult(sample.features, model.weights);
-        const auto dotProduct = runtime.context->EvalSum(coordinateProducts, runtime.slots);
+    for (const auto& block : encryptedTrain.blocks) {
+        const auto coordinateProducts = runtime.context->EvalMult(block.features, model.weights);
+        // Official MatrixVectorProductRow: sum feature columns independently
+        // for every row and replicate the dot product across that row.
+        const auto dotProduct = runtime.context->EvalSumCols(
+            coordinateProducts, runtime.rowWidth, *runtime.sumColsKeys);
         const auto score = runtime.context->EvalAdd(dotProduct, model.bias);
         const auto output = EvaluatePolynomialSigmoid(runtime, score);
-        const auto error = runtime.context->EvalSub(output, sample.label);
-        const auto sampleWeightGradient = runtime.context->EvalMult(sample.features, error);
+        const auto error = runtime.context->EvalSub(output, block.labels);
+        const auto weightProducts = runtime.context->EvalMult(block.features, error);
+        // Official MatrixVectorProductCol: reduce sample rows by feature.
+        // The result is a row-cloned gradient, matching the weights' layout.
+        const auto blockWeightGradient = runtime.context->EvalSumRows(
+            weightProducts, runtime.rowWidth, *runtime.sumRowsKeys);
+        // Zero-padded X rows have zero weight gradients, but sigmoid(bias) is
+        // NOT zero. Exclude padded rows explicitly from the bias gradient.
+        const auto validErrors = runtime.context->EvalMult(error, block.validRows);
+        const auto blockBiasGradient = runtime.context->EvalSumRows(
+            validErrors, runtime.rowWidth, *runtime.sumRowsKeys);
 
         if (!hasGradient) {
-            weightGradientSum = sampleWeightGradient;
-            biasGradientSum   = error;
+            weightGradientSum = blockWeightGradient;
+            biasGradientSum   = blockBiasGradient;
             hasGradient       = true;
         }
         else {
-            weightGradientSum = runtime.context->EvalAdd(weightGradientSum, sampleWeightGradient);
-            biasGradientSum   = runtime.context->EvalAdd(biasGradientSum, error);
+            weightGradientSum = runtime.context->EvalAdd(weightGradientSum, blockWeightGradient);
+            biasGradientSum   = runtime.context->EvalAdd(biasGradientSum, blockBiasGradient);
         }
     }
 
-    const double step = learningRate / static_cast<double>(encryptedTrain.size());
+    // All blocks contribute before ONE update: this is still full-batch GD.
+    // Divide by actual records, never by the padded row count.
+    const double step = learningRate / static_cast<double>(encryptedTrain.sampleCount);
     const auto weightUpdate = runtime.context->EvalMult(weightGradientSum, step);
     const auto biasUpdate   = runtime.context->EvalMult(biasGradientSum, step);
     return {
@@ -126,8 +148,16 @@ std::string RefreshMethodName(RefreshMethod method) {
 }
 
 FheRuntime CreateFheRuntime(const CkksConfiguration& configuration) {
-    if (configuration.slots == 0 || (configuration.slots & (configuration.slots - 1)) != 0) {
-        throw std::invalid_argument("CKKS slots must be a non-zero power of two");
+    if (configuration.slots != 2048) {
+        throw std::invalid_argument("Matrix reductions require all 2048 slots in the 4096-degree demo ring");
+    }
+    if (configuration.rowWidth == 0 ||
+        (configuration.rowWidth & (configuration.rowWidth - 1)) != 0 ||
+        configuration.bootstrapSlots == 0 ||
+        (configuration.bootstrapSlots & (configuration.bootstrapSlots - 1)) != 0 ||
+        configuration.rowWidth > configuration.bootstrapSlots ||
+        configuration.bootstrapSlots > configuration.slots) {
+        throw std::invalid_argument("Row width and bootstrap slots must be compatible powers of two");
     }
     if (configuration.levelBudget.size() != 2) {
         throw std::invalid_argument("CKKS bootstrapping needs a two-entry level budget");
@@ -159,7 +189,7 @@ FheRuntime CreateFheRuntime(const CkksConfiguration& configuration) {
     context->Enable(lbcrypto::FHE);
 
     const std::vector<std::uint32_t> bsgsDimensions{0, 0};
-    context->EvalBootstrapSetup(configuration.levelBudget, bsgsDimensions, configuration.slots);
+    context->EvalBootstrapSetup(configuration.levelBudget, bsgsDimensions, configuration.bootstrapSlots);
 
     auto keyPair = context->KeyGen();
     if (!keyPair.good()) {
@@ -167,34 +197,36 @@ FheRuntime CreateFheRuntime(const CkksConfiguration& configuration) {
     }
     context->EvalMultKeyGen(keyPair.secretKey);
     context->EvalSumKeyGen(keyPair.secretKey);
-    context->EvalBootstrapKeyGen(keyPair.secretKey, configuration.slots);
+    auto sumRowsKeys = context->EvalSumRowsKeyGen(keyPair.secretKey, nullptr, configuration.rowWidth);
+    auto sumColsKeys = context->EvalSumColsKeyGen(keyPair.secretKey);
+    context->EvalBootstrapKeyGen(keyPair.secretKey, configuration.bootstrapSlots);
     const std::uint32_t bootstrapTriggerLevel =
         multiplicativeDepth - configuration.levelsAvailableAfterBootstrap;
-    return {context, keyPair, multiplicativeDepth, configuration.slots, bootstrapTriggerLevel};
+    return {context, keyPair, multiplicativeDepth, configuration.slots,
+            configuration.rowWidth, configuration.bootstrapSlots,
+            sumRowsKeys, sumColsKeys, bootstrapTriggerLevel};
 }
 
 EncryptedDataset EncryptDataset(const FheRuntime& runtime, const labml::Dataset& data) {
     EncryptedDataset result;
-    result.reserve(data.size());
-    for (const auto& sample : data) {
-        if (sample.features.size() > runtime.slots) {
-            throw std::invalid_argument("Sample features do not fit in the configured CKKS slots");
-        }
-        std::vector<double> packedFeatures(runtime.slots, 0.0);
-        std::copy(sample.features.begin(), sample.features.end(), packedFeatures.begin());
-        // TenSEAL broadcasts its one-slot error over the feature vector. OpenFHE
-        // expresses the same operation by explicitly repeating the label.
-        const std::vector<double> packedLabel(runtime.slots, sample.label);
-
+    const auto packedBlocks = PackTrainingData(data, runtime.slots, runtime.rowWidth);
+    result.sampleCount = data.size();
+    result.featureCount = labml::FeatureCount(data);
+    result.blocks.reserve(packedBlocks.size());
+    for (const auto& block : packedBlocks) {
         auto featurePlaintext = runtime.context->MakeCKKSPackedPlaintext(
-            packedFeatures, 1, 0, nullptr, runtime.slots);
+            block.features, 1, 0, nullptr, runtime.slots);
         auto labelPlaintext = runtime.context->MakeCKKSPackedPlaintext(
-            packedLabel, 1, 0, nullptr, runtime.slots);
+            block.labels, 1, 0, nullptr, runtime.slots);
+        auto validRows = runtime.context->MakeCKKSPackedPlaintext(
+            block.validRows, 1, 0, nullptr, runtime.slots);
         featurePlaintext->SetLength(runtime.slots);
         labelPlaintext->SetLength(runtime.slots);
-        result.push_back({
+        result.blocks.push_back({
             runtime.context->Encrypt(runtime.keyPair.publicKey, featurePlaintext),
             runtime.context->Encrypt(runtime.keyPair.publicKey, labelPlaintext),
+            validRows,
+            block.sampleCount,
         });
     }
     return result;
@@ -209,7 +241,8 @@ EncryptedTrainingResult TrainEncrypted(
     std::size_t epochs,
     double learningRate,
     RefreshMethod refreshMethod) {
-    if (encryptedTrain.empty() || encryptedTrain.size() != train.size()) {
+    if (encryptedTrain.blocks.empty() || encryptedTrain.sampleCount != train.size() ||
+        encryptedTrain.featureCount != labml::FeatureCount(train)) {
         throw std::invalid_argument("Encrypted and plaintext training sets must be non-empty and aligned");
     }
     if (epochs == 0 || plaintextReference.epochs.size() != epochs) {
@@ -257,8 +290,16 @@ EncryptedTrainingResult TrainEncrypted(
             pairedSimulatedRefreshSeconds = SecondsBetween(simulatedStart, simulatedEnd);
 
             const auto refreshStart = Clock::now();
-            encryptedModel.weights = runtime.context->EvalBootstrap(updatedModel.weights);
-            encryptedModel.bias    = runtime.context->EvalBootstrap(updatedModel.bias);
+            // As in the official example, only the periodic model is sparsely
+            // bootstrapped. The matrix inputs stay fully packed and unchanged.
+            auto sparseWeights = updatedModel.weights->Clone();
+            auto sparseBias = updatedModel.bias->Clone();
+            sparseWeights->SetSlots(runtime.bootstrapSlots);
+            sparseBias->SetSlots(runtime.bootstrapSlots);
+            encryptedModel.weights = runtime.context->EvalBootstrap(sparseWeights);
+            encryptedModel.bias    = runtime.context->EvalBootstrap(sparseBias);
+            encryptedModel.weights->SetSlots(runtime.slots);
+            encryptedModel.bias->SetSlots(runtime.slots);
             const auto refreshEnd = Clock::now();
             refreshSeconds = SecondsBetween(refreshStart, refreshEnd);
             refreshed = true;
@@ -308,8 +349,8 @@ EncryptedTrainingResult TrainEncrypted(
         if (refreshed && refreshMethod == RefreshMethod::RealBootstrapping) {
             std::cout << " (paired decrypt+encrypt " << pairedSimulatedRefreshSeconds << " s)";
         }
-        std::cout << ", accuracy " << accuracy << ", loss " << loss
-                  << ", level " << levelBefore << " -> " << levelAfter << '\n';
+        std::cout << std::setprecision(6) << ", accuracy " << accuracy << ", loss " << loss
+                  << ", consumed level " << levelBefore << " -> " << levelAfter << '\n';
     }
     result.finalModel = currentPlainModel;
     return result;

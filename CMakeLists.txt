@@ -63,6 +63,7 @@ add_library(
     lab_ml
     src/dataset.cpp
     src/logistic_regression.cpp
+    src/sample_packing.cpp
 )
 
 add_library(lab_fhe src/ckks_logistic_regression.cpp)
@@ -85,4 +86,16 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/data/LogReg_sample_dataset.csv
             ${CMAKE_CURRENT_SOURCE_DIR}/data/framingham.csv
     )
+    add_executable(packing_tests tests/packing_tests.cpp)
+    target_link_libraries(packing_tests PRIVATE lab_ml)
+    add_test(NAME packing_tests COMMAND packing_tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/LogReg_sample_dataset.csv
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/framingham.csv)
+
+    add_executable(encrypted_packing_tests tests/encrypted_packing_tests.cpp)
+    target_link_libraries(encrypted_packing_tests PRIVATE lab_fhe)
+    add_test(NAME encrypted_packing_tests COMMAND encrypted_packing_tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/LogReg_sample_dataset.csv
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/framingham.csv)
+    set_tests_properties(encrypted_packing_tests PROPERTIES LABELS "encrypted;integration" TIMEOUT 300)
 endif()

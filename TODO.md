@@ -1,5 +1,6 @@
 # TODO
 
-- [ ] Add sample packing so multiple training samples are encoded into CKKS slots and processed with SIMD batching, instead of encrypting each sample separately.
-- [ ] Compare packed vs. unpacked training performance.
-- [ ] Improve README documentation.
+- [x] Add row-major sample packing adapted from the official OpenFHE example.
+- [x] Add encrypted regression tests for padding, multiple blocks, and post-bootstrap continuation.
+- [x] Improve README and document the packing/refresh design.
+- [ ] Run repeated, controlled packed-vs-unpacked benchmarks; the four-epoch report compares new measurements with earlier runs, not a fresh controlled A/B experiment.

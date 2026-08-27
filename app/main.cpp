@@ -1,6 +1,7 @@
 #include "openfhe_lab/ckks_logistic_regression.hpp"
 #include "openfhe_lab/dataset.hpp"
 #include "openfhe_lab/logistic_regression.hpp"
+#include "openfhe_lab/sample_packing.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -21,7 +22,7 @@ struct Options {
     std::string refresh{"both"};
     std::size_t epochs{100};
     double learningRate{0.01};
-    std::string outputPath = std::string(OPENFHE_LAB_SOURCE_DIR) + "/results/benchmark.csv";
+    std::string outputPath = std::string(OPENFHE_LAB_SOURCE_DIR) + "/results/benchmark_packed.csv";
     bool showHelp{false};
 };
 
@@ -203,16 +204,24 @@ int main(int argc, char* argv[]) {
                       << plainFinal.loss << "\n";
 
             const auto setupStart = Clock::now();
-            const auto runtime = labfhe::CreateFheRuntime();
+            labfhe::CkksConfiguration configuration;
+            configuration.rowWidth = static_cast<std::uint32_t>(
+                labfhe::PackedRowWidth(labml::FeatureCount(split.train)));
+            const auto runtime = labfhe::CreateFheRuntime(configuration);
             const double setupSeconds = ElapsedSeconds(setupStart);
             std::cout << "  OpenFHE setup: " << setupSeconds << " s; ring dimension "
                       << runtime.context->GetRingDimension() << ", slots " << runtime.slots
+                      << ", row width " << runtime.rowWidth
+                      << ", bootstrap slots " << runtime.bootstrapSlots
                       << ", multiplicative depth " << runtime.multiplicativeDepth << '\n';
 
             const auto encryptionStart = Clock::now();
             const auto encryptedTrain = labfhe::EncryptDataset(runtime, split.train);
             const double encryptionSeconds = ElapsedSeconds(encryptionStart);
-            std::cout << "  encrypted " << encryptedTrain.size() << " training samples in "
+            std::cout << "  packed " << encryptedTrain.sampleCount << " training samples into "
+                      << encryptedTrain.blocks.size() << " blocks ("
+                      << 2 * encryptedTrain.blocks.size() << " ciphertexts; "
+                      << runtime.slots / runtime.rowWidth << " rows/block) in "
                       << encryptionSeconds << " s\n";
 
             for (const auto method : SelectedRefreshMethods(options)) {
@@ -227,10 +236,12 @@ int main(int argc, char* argv[]) {
                     options.learningRate,
                     method);
                 WriteEncryptedRows(output, datasetName, method, encrypted);
+                output.flush();
                 const auto& finalEpoch = encrypted.epochs.back();
-                std::cout << "    final accuracy " << finalEpoch.accuracy << ", loss "
+                std::cout << std::setprecision(6) << "    final accuracy " << finalEpoch.accuracy << ", loss "
                           << finalEpoch.loss << ", mean refresh " << MeanRefreshSeconds(encrypted)
-                          << " s, max model error " << finalEpoch.maximumPlaintextModelError << "\n";
+                          << " s, max model error " << std::scientific << finalEpoch.maximumPlaintextModelError
+                          << std::defaultfloat << "\n";
             }
             std::cout << '\n';
         }
