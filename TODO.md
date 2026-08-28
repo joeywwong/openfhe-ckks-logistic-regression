@@ -7,3 +7,4 @@
 - [x] Add optional Nesterov accelerated gradient to plaintext and encrypted training, including state refresh and tests.
 - [ ] Compare NAG and GD convergence and total runtime in repeated, controlled runs.
 - [ ] Try different sigmoid approximations.
+- [ ] Dockerize the project for reproducible builds and execution.
