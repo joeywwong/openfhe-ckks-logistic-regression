@@ -1,3 +1,7 @@
+// Nesterov theta/phi update adapted from lr_nag.cpp in
+// openfheorg/openfhe-logreg-training-examples (BSD-2-Clause).
+// Copyright (c) 2023, Duality Technologies Inc. All rights reserved.
+// See THIRD_PARTY_NOTICES.md for the retained upstream license.
 #include "openfhe_lab/logistic_regression.hpp"
 
 #include <algorithm>
@@ -16,6 +20,24 @@ double SecondsBetween(const Clock::time_point& start, const Clock::time_point& e
 }
 
 }  // namespace
+
+std::string OptimizerName(Optimizer optimizer) {
+    switch (optimizer) {
+        case Optimizer::GradientDescent:
+            return "gd";
+        case Optimizer::NesterovAcceleratedGradient:
+            return "nag";
+    }
+    throw std::invalid_argument("Unknown optimizer");
+}
+
+void ValidateOptimizerConfiguration(const OptimizerConfiguration& configuration) {
+    OptimizerName(configuration.method);
+    if (!std::isfinite(configuration.momentum) || configuration.momentum < 0.0 ||
+        configuration.momentum >= 1.0) {
+        throw std::invalid_argument("Momentum must be finite and in [0, 1)");
+    }
+}
 
 double PolynomialSigmoid(double score) {
     return 0.5 + 0.197 * score - 0.004 * score * score * score;
@@ -73,16 +95,23 @@ PlaintextTrainingResult TrainPlaintext(
     const Dataset& train,
     const Dataset& test,
     std::size_t epochs,
-    double learningRate) {
+    double learningRate,
+    const OptimizerConfiguration& optimizer) {
+    ValidateOptimizerConfiguration(optimizer);
     if (train.empty() || test.empty()) {
         throw std::invalid_argument("Training and test datasets must not be empty");
     }
-    if (epochs == 0 || learningRate <= 0.0) {
-        throw std::invalid_argument("Epochs and learning rate must be positive");
+    if (epochs == 0 || !std::isfinite(learningRate) || learningRate <= 0.0) {
+        throw std::invalid_argument("Epochs and learning rate must be positive and finite");
     }
 
+    const bool useMomentum =
+        optimizer.method == Optimizer::NesterovAcceleratedGradient && optimizer.momentum > 0.0;
+    // model is the look-ahead theta; previousStep stores the unaccelerated phi.
     PlainModel model{std::vector<double>(FeatureCount(train), 0.0), 0.0};
+    PlainModel previousStep = model;
     PlaintextTrainingResult result;
+    result.optimizer = optimizer;
     result.epochs.reserve(epochs);
 
     for (std::size_t epoch = 0; epoch < epochs; ++epoch) {
@@ -100,9 +129,20 @@ PlaintextTrainingResult TrainPlaintext(
 
         const double step = learningRate / static_cast<double>(train.size());
         for (std::size_t feature = 0; feature < model.weights.size(); ++feature) {
-            model.weights[feature] -= step * weightGradient[feature];
+            const double nextStep = model.weights[feature] - step * weightGradient[feature];
+            model.weights[feature] = nextStep;
+            if (useMomentum && epoch > 0) {
+                model.weights[feature] += optimizer.momentum * (nextStep - previousStep.weights[feature]);
+            }
+            previousStep.weights[feature] = nextStep;
         }
-        model.bias -= step * biasGradient;
+        const double nextBiasStep = model.bias - step * biasGradient;
+        model.bias = nextBiasStep;
+        // Match upstream: the first epoch is an ordinary gradient step.
+        if (useMomentum && epoch > 0) {
+            model.bias += optimizer.momentum * (nextBiasStep - previousStep.bias);
+        }
+        previousStep.bias = nextBiasStep;
         const auto end = Clock::now();
 
         result.epochs.push_back(

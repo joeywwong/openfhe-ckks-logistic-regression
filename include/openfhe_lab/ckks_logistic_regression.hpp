@@ -62,7 +62,7 @@ struct EncryptedDataset {
 
 struct EncryptedModel {
     // The lab encrypted weights and bias separately. This project deliberately
-    // keeps that layout so refresh means two ciphertext refresh operations.
+    // keeps that layout. NAG retains two such models (theta and previous phi).
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> weights;
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> bias;
 };
@@ -101,6 +101,7 @@ EncryptedTrainingResult TrainEncrypted(
     const labml::PlaintextTrainingResult& plaintextReference,
     std::size_t epochs,
     double learningRate,
-    RefreshMethod refreshMethod);
+    RefreshMethod refreshMethod,
+    const labml::OptimizerConfiguration& optimizer = {});
 
 }  // namespace labfhe

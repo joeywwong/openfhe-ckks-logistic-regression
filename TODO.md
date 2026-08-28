@@ -4,5 +4,6 @@
 - [x] Add encrypted regression tests for padding, multiple blocks, and post-bootstrap continuation.
 - [x] Improve README and document the packing/refresh design.
 - [ ] Run repeated, controlled packed-vs-unpacked benchmarks; the four-epoch report compares new measurements with earlier runs, not a fresh controlled A/B experiment.
-- [ ] Use Nesterov Accelerated Gradient, see if optimization will be accelerated.
+- [x] Add optional Nesterov accelerated gradient to plaintext and encrypted training, including state refresh and tests.
+- [ ] Compare NAG and GD convergence and total runtime in repeated, controlled runs.
 - [ ] Try different sigmoid approximations.

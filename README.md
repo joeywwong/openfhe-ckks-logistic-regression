@@ -22,11 +22,12 @@ Only `LogReg_sample_dataset.csv` and `framingham.csv` are used.
 
 Training samples now use **row-major CKKS SIMD packing**, adapted from the
 [official OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples).
-This requested optimization changes the ciphertext layout, not the lab's
-data processing, model, optimizer, or sigmoid. The official example's Nesterov
-momentum and Chebyshev sigmoid are not adopted here.
+Packing preserves the lab's data processing and cubic sigmoid. Full-batch
+Nesterov accelerated gradient (NAG), adapted from the same example, is now an
+optional optimizer; ordinary gradient descent (GD) remains the default.
+The upstream Chebyshev sigmoid is not adopted.
 
-## Lab behavior preserved
+## Lab behavior preserved by default
 
 - 70% training and 30% test data after a seed-4 shuffle;
 - zero-initialized binary logistic regression;
@@ -40,6 +41,30 @@ momentum and Chebyshev sigmoid are not adopted here.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the one-to-one mapping and timing
 definitions.
+
+## Nesterov accelerated gradient
+
+NAG uses momentum to evaluate the next gradient at a look-ahead model. It can
+speed convergence, although the benefit depends on the data and step size.
+Following [the upstream update](https://github.com/openfheorg/openfhe-logreg-training-examples/blob/b9f38f4e8e6fc93ef5d2a3a5d880f80e72d0484d/lr_nag.cpp#L436-L478),
+both weights and bias use:
+
+```text
+phi_next   = theta - learning_rate * mean_gradient(theta)
+theta_next = phi_next + momentum * (phi_next - phi)
+phi        = phi_next
+```
+
+Here `theta` is the look-ahead model and `phi` is the previous gradient-step
+model. Both start at zero; the first epoch omits momentum, as in the upstream
+example. Metrics and the final model use `theta`. Select `--optimizer nag`;
+`--momentum` defaults to `0.1`, must be finite in `[0, 1)`, and `0` reduces
+to GD. The cubic sigmoid, full-batch averaging, and learning rate are unchanged.
+
+With nonzero momentum, encrypted training retains four ciphertexts (weights
+and bias for both states) and preserves both states through simulated or real
+bootstrapping. This increases arithmetic and refresh costs. Larger momentum
+can also push scores outside the cubic sigmoid's useful range.
 
 ## Sample packing
 
@@ -77,6 +102,8 @@ cd openfhe-ckks-logistic-regression
 
 Tests include plaintext checks, packing/padding checks, and encrypted tests on
 subsets of the two lab datasets, including training after a real bootstrap.
+The tests also check NAG against an independent velocity formulation, zero
+momentum against GD, and encrypted NAG after real bootstrapping.
 No CMake presets are needed. The workflow was verified with CMake 3.22.1;
 the CMake 3.5.1 compatibility branch has not been executed locally.
 
@@ -108,6 +135,14 @@ Direct executable examples:
 ./build/openfhe_lab_compare --dataset framingham --refresh both --epochs 4
 ```
 
+For NAG with both refresh methods:
+
+```bash
+./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --optimizer nag --momentum 0.1
+# Both lab datasets, using the comparison script:
+OPTIMIZER=nag MOMENTUM=0.1 EPOCHS=4 ./scripts/run_comparison_wsl.sh
+```
+
 Options:
 
 ```text
@@ -115,12 +150,17 @@ Options:
 --refresh simulated|real|both
 --epochs N
 --learning-rate X
+--optimizer gd|nag
+--momentum X
 --output PATH
 ```
 
-New measurements go to `results/benchmark_packed.csv`. `OUTPUT_PATH` overrides
-that path when using the script. The earlier `results/benchmark.csv` is left
-intact. See [`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) for the new run;
+New measurements go to `results/benchmark_packed.csv` for GD or
+`results/benchmark_nag.csv` for NAG. `OUTPUT_PATH` overrides that path when using
+the script. CSV rows include `optimizer` and the effective `momentum` (zero for
+GD). Existing result reports describe GD, not NAG. The earlier
+`results/benchmark.csv` is left intact. See
+[`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) for the earlier packed GD run;
 [`docs/RESULTS.md`](docs/RESULTS.md) is the historical unpacked report.
 
 ## Reported metrics
@@ -135,7 +175,11 @@ intact. See [`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) for the new run;
 - maximum encrypted-model error versus the matching plaintext epoch;
 - paired decrypt+encrypt time on the same worn model whenever a genuine real
   bootstrap occurs;
-- consumed CKKS level before and after refresh.
+- maximum consumed CKKS level across the complete optimizer state before and
+  after refresh.
+
+NAG arithmetic and refresh timings include both optimizer states. The paired
+simulated-refresh measurement also refreshes a discarded copy of both states.
 
 ## Repository layout
 
@@ -166,5 +210,5 @@ the model to the secret-key holder between epochs. See [`SECURITY.md`](SECURITY.
 
 ## License
 
-Project code: MIT. Adapted packing portions retain their BSD-2-Clause notice.
+Project code: MIT. Adapted packing and NAG portions retain their BSD-2-Clause notice.
 See [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

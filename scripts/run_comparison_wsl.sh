@@ -3,7 +3,13 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EPOCHS="${EPOCHS:-100}"
-OUTPUT_PATH="${OUTPUT_PATH:-${PROJECT_DIR}/results/benchmark_packed.csv}"
+OPTIMIZER="${OPTIMIZER:-gd}"
+MOMENTUM="${MOMENTUM:-0.1}"
+DEFAULT_OUTPUT_PATH="${PROJECT_DIR}/results/benchmark_packed.csv"
+if [[ "${OPTIMIZER}" == "nag" ]]; then
+  DEFAULT_OUTPUT_PATH="${PROJECT_DIR}/results/benchmark_nag.csv"
+fi
+OUTPUT_PATH="${OUTPUT_PATH:-${DEFAULT_OUTPUT_PATH}}"
 cd "${PROJECT_DIR}"
 
 "${PROJECT_DIR}/scripts/build_and_test_wsl.sh"
@@ -12,4 +18,6 @@ cd "${PROJECT_DIR}"
   --refresh both \
   --epochs "${EPOCHS}" \
   --learning-rate 0.01 \
+  --optimizer "${OPTIMIZER}" \
+  --momentum "${MOMENTUM}" \
   --output "${OUTPUT_PATH}"

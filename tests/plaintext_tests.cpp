@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -12,6 +13,93 @@ void Require(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+template <typename Function>
+void RequireInvalid(Function function) {
+    bool rejected = false;
+    try {
+        function();
+    }
+    catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    Require(rejected, "Invalid training configuration was accepted");
+}
+
+void CheckNesterovUpdates(const labml::Dataset& data) {
+    constexpr std::size_t epochs = 5;
+    constexpr double learningRate = 0.01;
+    const auto gd = labml::TrainPlaintext(data, data, epochs, learningRate);
+    const labml::OptimizerConfiguration zeroMomentum{labml::Optimizer::NesterovAcceleratedGradient, 0.0};
+    const auto zero = labml::TrainPlaintext(data, data, epochs, learningRate, zeroMomentum);
+    for (std::size_t epoch = 0; epoch < epochs; ++epoch) {
+        Require(labml::MaximumModelError(gd.epochs[epoch].model, zero.epochs[epoch].model) == 0.0,
+                "Zero-momentum NAG must reduce exactly to GD");
+    }
+
+    for (const double momentum : {0.1, 0.8}) {
+        const labml::OptimizerConfiguration optimizer{labml::Optimizer::NesterovAcceleratedGradient, momentum};
+        const auto nag = labml::TrainPlaintext(data, data, epochs, learningRate, optimizer);
+        Require(nag.epochs.size() == epochs, "NAG must report every epoch");
+        Require(labml::MaximumModelError(nag.epochs.front().model, gd.epochs.front().model) == 0.0,
+                "Upstream NAG starts with one ordinary gradient step");
+
+        // Independent velocity formulation after the common first step:
+        // lookAhead = base + mu*v; v = mu*v - lr*g(lookAhead); base += v.
+        // The reported theta is the next lookAhead, not the unaccelerated base.
+        auto base = gd.epochs.front().model;
+        labml::PlainModel velocity{std::vector<double>(base.weights.size(), 0.0), 0.0};
+        for (std::size_t epoch = 1; epoch < epochs; ++epoch) {
+            auto lookAhead = base;
+            for (std::size_t feature = 0; feature < base.weights.size(); ++feature) {
+                lookAhead.weights[feature] += momentum * velocity.weights[feature];
+            }
+            lookAhead.bias += momentum * velocity.bias;
+            labml::PlainModel gradient{std::vector<double>(base.weights.size(), 0.0), 0.0};
+            for (const auto& sample : data) {
+                const double error = labml::PolynomialSigmoid(labml::LinearScore(lookAhead, sample)) - sample.label;
+                for (std::size_t feature = 0; feature < base.weights.size(); ++feature) {
+                    gradient.weights[feature] += sample.features[feature] * error / data.size();
+                }
+                gradient.bias += error / data.size();
+            }
+            for (std::size_t feature = 0; feature < base.weights.size(); ++feature) {
+                velocity.weights[feature] = momentum * velocity.weights[feature] -
+                    learningRate * gradient.weights[feature];
+                base.weights[feature] += velocity.weights[feature];
+                lookAhead.weights[feature] = base.weights[feature] + momentum * velocity.weights[feature];
+            }
+            velocity.bias = momentum * velocity.bias - learningRate * gradient.bias;
+            base.bias += velocity.bias;
+            lookAhead.bias = base.bias + momentum * velocity.bias;
+            Require(labml::MaximumModelError(lookAhead, nag.epochs[epoch].model) < 1e-12,
+                    "NAG differs from the independent look-ahead velocity update");
+            Require(std::abs(nag.epochs[epoch].loss - labml::ExactLogLoss(lookAhead, data)) < 1e-12,
+                    "NAG metrics must use the reported look-ahead model");
+        }
+        Require(labml::MaximumModelError(nag.finalModel, gd.finalModel) > 1e-8,
+                "Nonzero momentum must change the training trajectory");
+        Require(std::abs(nag.finalModel.bias - gd.finalModel.bias) > 1e-8,
+                "Nesterov acceleration must also update the bias");
+        Require(labml::MaximumModelError(nag.finalModel, nag.epochs.back().model) == 0.0,
+                "Final NAG model must match its last epoch");
+    }
+
+    for (const double momentum : {-0.1, 1.0, std::numeric_limits<double>::infinity(),
+                                   std::numeric_limits<double>::quiet_NaN()}) {
+        RequireInvalid([&] {
+            labml::TrainPlaintext(data, data, epochs, learningRate,
+                                 {labml::Optimizer::NesterovAcceleratedGradient, momentum});
+        });
+    }
+    for (const double rate : {0.0, -0.01, std::numeric_limits<double>::infinity(),
+                              std::numeric_limits<double>::quiet_NaN()}) {
+        RequireInvalid([&] { labml::TrainPlaintext(data, data, epochs, rate); });
+    }
+    RequireInvalid([&] {
+        labml::TrainPlaintext(data, data, epochs, learningRate, {static_cast<labml::Optimizer>(-1), 0.1});
+    });
 }
 
 }  // namespace
@@ -45,7 +133,10 @@ int main(int argc, char* argv[]) {
         Require(trained.epochs.back().accuracy >= 0.95,
                 "Linearly separable LogReg sample should classify accurately");
 
-        std::cout << "All plaintext tests passed\n";
+        CheckNesterovUpdates(labml::Dataset(logregSplit.train.begin(), logregSplit.train.begin() + 13));
+        CheckNesterovUpdates(labml::Dataset(framinghamSplit.train.begin(), framinghamSplit.train.begin() + 129));
+
+        std::cout << "All plaintext and Nesterov tests passed\n";
         return 0;
     }
     catch (const std::exception& error) {

@@ -7,7 +7,11 @@ The row-major, zero-padded sample layout, repeated label/weight layout, and
 commit `b9f38f4e8e6fc93ef5d2a3a5d880f80e72d0484d`, specifically `utils.cpp`,
 `enc_matrix.h`, and the sparse model bootstrap pattern in `lr_nag.cpp`.
 The local adaptation adds multiple ciphertext blocks and an explicit valid-row
-mask while preserving this project's lab optimizer and separate bias.
+mask while preserving this project's separate bias and default lab optimizer.
+The optional fixed-momentum Nesterov update in `src/logistic_regression.cpp`
+and `src/ckks_logistic_regression.cpp` is also adapted from `lr_nag.cpp` at the
+same commit, including its first step without momentum. Both retained optimizer
+states are refreshed using this project's separate weight/bias layout.
 
 ## Upstream BSD 2-Clause License
 
