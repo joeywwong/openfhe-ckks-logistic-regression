@@ -44,27 +44,46 @@ definitions.
 
 ## Nesterov accelerated gradient
 
-NAG uses momentum to evaluate the next gradient at a look-ahead model. It can
-speed convergence, although the benefit depends on the data and step size.
-Following [the upstream update](https://github.com/openfheorg/openfhe-logreg-training-examples/blob/b9f38f4e8e6fc93ef5d2a3a5d880f80e72d0484d/lr_nag.cpp#L436-L478),
-both weights and bias use:
+NAG evaluates the gradient at a **look-ahead model**, extrapolated using recent
+parameter changes, so the gradient can correct the momentum direction. 
 
-```text
-phi_next   = theta - learning_rate * mean_gradient(theta)
-theta_next = phi_next + momentum * (phi_next - phi)
-phi        = phi_next
+This project follows [the OpenFHE update](https://github.com/openfheorg/openfhe-logreg-training-examples/blob/b9f38f4e8e6fc93ef5d2a3a5d880f80e72d0484d/lr_nag.cpp#L436-L478),
+using fixed momentum after the first epoch. For `t = 0, 1, ...`, both weights
+and bias follow:
+
+```math
+\begin{aligned}
+\theta_0 &= \phi_0 = \theta_{\mathrm{init}}, \qquad \theta_{\mathrm{init}} = 0 \text{ in this implementation.}, \\
+\beta_t &=
+\begin{cases}
+0, & t = 0, \\
+\mu, & t > 0,
+\end{cases} \\
+\phi_{t+1} &= \theta_t - \eta\,g(\theta_t), \\
+\theta_{t+1} &= \phi_{t+1} + \beta_t\left(\phi_{t+1}-\phi_t\right).
+\end{aligned}
 ```
 
-Here `theta` is the look-ahead model and `phi` is the previous gradient-step
-model. Both start at zero; the first epoch omits momentum, as in the upstream
-example. Metrics and the final model use `theta`. Select `--optimizer nag`;
-`--momentum` defaults to `0.1`, must be finite in `[0, 1)`, and `0` reduces
-to GD. The cubic sigmoid, full-batch averaging, and learning rate are unchanged.
+- $\theta_t$: look-ahead model used to compute the gradient.
+- $\phi_t$: previous unaccelerated gradient-step model.
+- $\eta$: learning rate.
+- $\mu$: configured momentum coefficient.
+- $g(\theta_t)$: full-batch gradient approximation using the cubic sigmoid.
+
+The first epoch omits extrapolation because $\beta_0=0$.
+
+Select `--optimizer nag`; `--momentum` defaults to `0.1`, must be finite in
+`[0, 1)`, and `0` reduces to GD. The cubic sigmoid, full-batch averaging, and
+learning rate are unchanged. In a 100-epoch experiment, NAG showed faster 
+loss reduction than gradient descent under the tested configuration. 
+Faster convergence is not guaranteed for this fixed-momentum, 
+approximate-gradient implementation.
 
 With nonzero momentum, encrypted training retains four ciphertexts (weights
-and bias for both states) and preserves both states through simulated or real
-bootstrapping. This increases arithmetic and refresh costs. Larger momentum
-can also push scores outside the cubic sigmoid's useful range.
+and bias for both model states $\theta_t$ and $\phi_t$), preserving both states through simulated or real
+bootstrapping. The extra arithmetic and refresh work can outweigh any reduction
+in epochs. Larger momentum can also push scores outside the cubic sigmoid's
+useful range.
 
 ## Sample packing
 
