@@ -2,10 +2,11 @@
 
 ## Scope
 
-This project ports the original TenSEAL experiment to OpenFHE. It does not
-replace the lab's optimizer, split, preprocessing, sigmoid approximation, or
-metrics. At the user's request, the original ciphertext-per-sample layout is
-now replaced by sample packing adapted from the official OpenFHE example.
+This project ports the original TenSEAL experiment to OpenFHE. By default it
+retains the lab's optimizer, split, preprocessing, sigmoid approximation, and
+metrics. Nesterov accelerated gradient is available as an optional optimizer.
+At the user's request, the original ciphertext-per-sample layout is now replaced
+by sample packing adapted from the official OpenFHE example.
 Both refresh methods use the same packed circuit.
 
 ## Behavior retained from the lab
@@ -15,7 +16,7 @@ Both refresh methods use the same packed circuit.
 | Datasets | Only `LogReg_sample_dataset.csv` and `framingham.csv` |
 | Split | Shuffle, then first `floor(0.30*n)` records for test; seed 4 |
 | Model | Binary logistic regression; zero-initialized weights and bias |
-| Optimizer | Full-batch gradient descent |
+| Optimizer | Full-batch gradient descent by default; optional NAG |
 | Default run | 100 epochs and learning rate 0.01 |
 | Encrypted input | Features and labels remain encrypted; multiple samples now share each block |
 | Model layout | Encrypted weights and encrypted bias are separate ciphertexts |
@@ -61,24 +62,50 @@ valid:    [1,  1   | 1,  1   | 1,  1   | 0,0 | ...]
    (not padded rows), and make one update with learning rate 0.01.
 
 This extends the upstream layout to multiple blocks without changing to
-mini-batch SGD. It does not adopt Nesterov, pre-scaled data, Chebyshev sigmoid,
-or the upstream dataset. The upstream code is explicitly illustrative, not a
-performance benchmark; measurements here refer only to this local adaptation.
+mini-batch SGD. Optional Nesterov acceleration uses the same full-batch
+gradient. Pre-scaled data, Chebyshev sigmoid, and the upstream dataset are not
+adopted. The upstream code is explicitly illustrative, not a performance
+benchmark; measurements here refer only to this local adaptation.
 
 LogReg uses width 2, 1,024 rows/block, one block and two input ciphertexts.
 Framingham uses width 16, 128 rows/block, seven blocks and 14 input ciphertexts.
-Both still have two separate encrypted model ciphertexts.
+GD retains two separate encrypted model ciphertexts. NAG with nonzero
+momentum retains four, as described below.
 
 The model repeats with period `R`, which divides 16. Following the upstream
 sparse-bootstrap pattern, a clone's slot metadata is set to 16 for
 `EvalBootstrap` and back to 2,048 for matrix operations. This is valid only for
 the periodic model, not for arbitrary sample ciphertexts. Unlike the upstream
-theta/phi model, weights and bias are still refreshed separately.
+combined theta/phi ciphertext, weights and bias are still refreshed separately
+for each optimizer state.
 
 Packing changes floating-point summation order, not the full-batch formula.
-Integration tests compare every encrypted epoch with the unchanged plaintext
-trainer, covering partial blocks, both feature widths, multiple blocks, and
+Integration tests compare every encrypted epoch with the matching plaintext
+optimizer, covering partial blocks, both feature widths, multiple blocks, and
 training after the first real bootstrap.
+
+## Nesterov optimizer state
+
+The optional `--optimizer nag` follows the fixed-momentum theta/phi recurrence
+in upstream `lr_nag.cpp`, including its first epoch without momentum. The
+plaintext and encrypted trainers both compute the gradient at theta, take an
+unaccelerated step phi_next, then extrapolate theta_next from phi_next and the
+previous phi. Both weights and bias participate; the reported/final model is
+theta. See [the README](../README.md#nesterov-accelerated-gradient) for the formula.
+
+Nonzero momentum requires two separate models (four ciphertexts). Both states
+use the existing row-cloned layout and sparse bootstrap. Each worn ciphertext
+is bootstrapped only when its consumed level exceeds the trigger; a less-worn
+state can be retained without a no-op bootstrap. Simulated refresh re-encrypts
+both states each epoch. Neither refresh path resets momentum or replaces the
+previous phi with theta. Real-mode metric/paired-benchmark decryptions never
+feed the training state.
+
+Momentum defaults to 0.1 and must be finite in [0, 1). Zero momentum takes the
+GD circuit without an extra encrypted state. GD remains the default so earlier
+lab measurements are reproducible. The CLI passes identical settings to both
+trainers; the encrypted API also rejects a reference from a different optimizer
+or momentum. CSV rows append `optimizer` and `momentum` (zero for GD).
 
 ## Framingham preprocessing
 
@@ -101,9 +128,10 @@ keys, and learning rate.
 
 ### Simulated bootstrapping
 
-After an encrypted epoch, the client decrypts both updated model ciphertexts and
-immediately encrypts the recovered weights and bias again. `refresh_seconds`
-measures both decryption and re-encryption. This is the technique used by the
+After an encrypted epoch, the client decrypts the updated model ciphertexts and
+immediately encrypts the recovered weights and bias again. NAG also refreshes
+the previous gradient-step model. `refresh_seconds` measures both decryption
+and re-encryption. This is the technique used by the
 TenSEAL lab to simulate a refreshed modulus/noise budget.
 
 ### Real bootstrapping
@@ -111,9 +139,10 @@ TenSEAL lab to simulate a refreshed modulus/noise budget.
 OpenFHE 1.1.2 returns the original ciphertext when it still has at least as many
 modulus towers as bootstrapping would produce. The real branch therefore waits
 through the initial natural epochs until the consumed level is greater than the
-post-bootstrap trigger. It then calls `EvalBootstrap` on the weight ciphertext
-and bias ciphertext. No secret key is used for these two refreshes. Once the
-model is at the shorter post-bootstrap chain, the next epoch consumes enough
+post-bootstrap trigger. It then calls `EvalBootstrap` on each worn weight/bias
+ciphertext, including the NAG gradient-step state. No secret key is used for
+these refreshes. Once the model is at the shorter post-bootstrap chain, the
+next epoch consumes enough
 levels to make every subsequent bootstrap genuine.
 
 At every genuine bootstrap point, the program also decrypts and re-encrypts a
@@ -127,18 +156,21 @@ performed solely to report the lab's per-epoch accuracy and loss; its time is
 ## Timing definitions
 
 - `homomorphic_seconds`: encrypted forward passes, gradient accumulation, and
-  model update.
-- `refresh_seconds`: decrypt+encrypt for simulated bootstrapping, or two
-  `EvalBootstrap` calls for real bootstrapping.
+  model update, including NAG extrapolation when selected.
+- `refresh_seconds`: decrypt+encrypt for simulated bootstrapping, or
+  `EvalBootstrap` for real bootstrapping, across all retained optimizer state
+  (two ciphertexts for GD, four for NAG with nonzero momentum).
 - `paired_simulated_refresh_seconds`: at a genuine real-bootstrap point, the
-  cost of decrypting and re-encrypting a discarded copy of the same input.
+  cost of decrypting and re-encrypting a discarded copy of the same input,
+  including both NAG states.
 - `seconds_per_epoch`: `homomorphic_seconds + refresh_seconds`. Accuracy/loss
   calculation and real-mode metric-only decryption are excluded.
 - `metric_decryption_seconds`: real-mode decryption used only to calculate the
   lab's epoch metrics.
 
-The CSV also reports consumed OpenFHE levels before and after refresh and the
-maximum absolute coefficient error relative to the matching plaintext epoch.
+The CSV also reports maximum consumed OpenFHE levels across all optimizer
+ciphertexts before and after refresh and the maximum absolute coefficient
+error relative to the matching plaintext epoch.
 
 ## OpenFHE configuration
 
@@ -148,11 +180,12 @@ uses 2,048 data slots and 16 sparse model-bootstrap slots, `FLEXIBLEAUTO`,
 modulus, `HYBRID` key switching, level budget `{3,3}`, and ring dimension 4096.
 The small `HEStd_NotSet` ring is taken from OpenFHE 1.1.2's bootstrapping example
 and makes no production security claim. These OpenFHE bootstrapping parameters
-replace the TenSEAL-specific modulus-chain syntax; the ML experiment remains
-the same.
+replace the TenSEAL-specific modulus-chain syntax; the default GD experiment
+remains the same.
 
-Packed row summation adds a masked reduction to the circuit, so level
-consumption and the first real-bootstrap epoch can differ from the old
+Packed row summation adds a masked reduction to the circuit, and NAG adds a
+scalar momentum multiplication after the first epoch, so level consumption
+and the first real-bootstrap epoch can differ from the old
 per-sample implementation. Refresh is selected from the actual consumed
 level, not forced by epoch number. Higher consumed level means less remaining
 capacity; the log reports before/after refresh, not before/after training.

@@ -4,6 +4,7 @@
 #include "openfhe_lab/sample_packing.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -22,7 +23,8 @@ struct Options {
     std::string refresh{"both"};
     std::size_t epochs{100};
     double learningRate{0.01};
-    std::string outputPath = std::string(OPENFHE_LAB_SOURCE_DIR) + "/results/benchmark_packed.csv";
+    labml::OptimizerConfiguration optimizer;
+    std::string outputPath;
     bool showHelp{false};
 };
 
@@ -38,6 +40,8 @@ void PrintUsage(const char* program) {
         << "  --refresh simulated|real|both    Model refresh method (default: both)\n"
         << "  --epochs N                       Lab default is 100\n"
         << "  --learning-rate X                Lab default is 0.01\n"
+        << "  --optimizer gd|nag               Full-batch optimizer (default: gd)\n"
+        << "  --momentum X                     NAG coefficient in [0, 1) (default: 0.1)\n"
         << "  --output PATH                    Per-epoch CSV output path\n"
         << "  --help                           Show this message\n";
 }
@@ -66,6 +70,24 @@ Options ParseArguments(int argc, char* argv[]) {
         else if (flag == "--learning-rate") {
             options.learningRate = std::stod(value);
         }
+        else if (flag == "--optimizer") {
+            if (value == "gd") {
+                options.optimizer.method = labml::Optimizer::GradientDescent;
+            }
+            else if (value == "nag") {
+                options.optimizer.method = labml::Optimizer::NesterovAcceleratedGradient;
+            }
+            else {
+                throw std::invalid_argument("--optimizer must be gd or nag");
+            }
+        }
+        else if (flag == "--momentum") {
+            std::size_t parsed = 0;
+            options.optimizer.momentum = std::stod(value, &parsed);
+            if (parsed != value.size()) {
+                throw std::invalid_argument("--momentum must be a number in [0, 1)");
+            }
+        }
         else if (flag == "--output") {
             options.outputPath = value;
         }
@@ -79,8 +101,14 @@ Options ParseArguments(int argc, char* argv[]) {
     if (options.refresh != "simulated" && options.refresh != "real" && options.refresh != "both") {
         throw std::invalid_argument("--refresh must be simulated, real, or both");
     }
-    if (options.epochs == 0 || options.learningRate <= 0.0) {
-        throw std::invalid_argument("Epochs and learning rate must be positive");
+    if (options.epochs == 0 || !std::isfinite(options.learningRate) || options.learningRate <= 0.0) {
+        throw std::invalid_argument("Epochs and learning rate must be positive and finite");
+    }
+    labml::ValidateOptimizerConfiguration(options.optimizer);
+    if (options.outputPath.empty()) {
+        options.outputPath = std::string(OPENFHE_LAB_SOURCE_DIR) + "/results/" +
+            (options.optimizer.method == labml::Optimizer::NesterovAcceleratedGradient
+                ? "benchmark_nag.csv" : "benchmark_packed.csv");
     }
     return options;
 }
@@ -119,7 +147,13 @@ labml::Dataset LoadDataset(labml::DatasetKind kind) {
 void WriteCsvHeader(std::ofstream& output) {
     output << "dataset,method,epoch,homomorphic_seconds,refresh_seconds,metric_decryption_seconds,"
               "paired_simulated_refresh_seconds,seconds_per_epoch,accuracy,loss,"
-              "max_plaintext_model_error,refreshed,level_before_refresh,level_after_refresh\n";
+              "max_plaintext_model_error,refreshed,level_before_refresh,level_after_refresh,optimizer,momentum\n";
+}
+
+void WriteOptimizerColumns(std::ofstream& output, const labml::OptimizerConfiguration& optimizer) {
+    output << ',' << labml::OptimizerName(optimizer.method) << ','
+           << (optimizer.method == labml::Optimizer::NesterovAcceleratedGradient ? optimizer.momentum : 0.0)
+           << '\n';
 }
 
 void WritePlaintextRows(
@@ -129,7 +163,8 @@ void WritePlaintextRows(
     for (const auto& epoch : result.epochs) {
         output << dataset << ",plaintext," << epoch.epoch << ',' << epoch.seconds
                << ",0,0,0," << epoch.seconds << ',' << epoch.accuracy << ',' << epoch.loss
-               << ",0,0,0,0\n";
+               << ",0,0,0,0";
+        WriteOptimizerColumns(output, result.optimizer);
     }
 }
 
@@ -137,6 +172,7 @@ void WriteEncryptedRows(
     std::ofstream& output,
     const std::string& dataset,
     labfhe::RefreshMethod method,
+    const labml::OptimizerConfiguration& optimizer,
     const labfhe::EncryptedTrainingResult& result) {
     for (const auto& epoch : result.epochs) {
         output << dataset << ',' << labfhe::RefreshMethodName(method) << ',' << epoch.epoch << ','
@@ -145,7 +181,8 @@ void WriteEncryptedRows(
                << epoch.secondsPerEpoch << ','
                << epoch.accuracy << ',' << epoch.loss << ',' << epoch.maximumPlaintextModelError
                << ',' << (epoch.refreshed ? 1 : 0) << ',' << epoch.levelBeforeRefresh << ','
-               << epoch.levelAfterRefresh << '\n';
+               << epoch.levelAfterRefresh;
+        WriteOptimizerColumns(output, optimizer);
     }
 }
 
@@ -183,7 +220,10 @@ int main(int argc, char* argv[]) {
         WriteCsvHeader(output);
 
         std::cout << "OpenFHE port of the TenSEAL encrypted logistic-regression lab\n"
-                  << "Fixed lab settings: shuffled 70/30 split, seed 4, cubic sigmoid, full-batch GD\n"
+                  << "Fixed lab settings: shuffled 70/30 split, seed 4, cubic sigmoid, full-batch training\n"
+                  << "Optimizer: " << labml::OptimizerName(options.optimizer.method)
+                  << ", momentum: " << (options.optimizer.method == labml::Optimizer::NesterovAcceleratedGradient
+                      ? options.optimizer.momentum : 0.0) << "\n"
                   << "Epochs: " << options.epochs << ", learning rate: " << options.learningRate << "\n"
                   << "Result CSV: " << options.outputPath << "\n\n";
 
@@ -197,7 +237,7 @@ int main(int argc, char* argv[]) {
                       << " test\n";
 
             const auto plaintext = labml::TrainPlaintext(
-                split.train, split.test, options.epochs, options.learningRate);
+                split.train, split.test, options.epochs, options.learningRate, options.optimizer);
             WritePlaintextRows(output, datasetName, plaintext);
             const auto& plainFinal = plaintext.epochs.back();
             std::cout << "  plaintext final: accuracy " << plainFinal.accuracy << ", loss "
@@ -234,8 +274,9 @@ int main(int argc, char* argv[]) {
                     plaintext,
                     options.epochs,
                     options.learningRate,
-                    method);
-                WriteEncryptedRows(output, datasetName, method, encrypted);
+                    method,
+                    options.optimizer);
+                WriteEncryptedRows(output, datasetName, method, options.optimizer, encrypted);
                 output.flush();
                 const auto& finalEpoch = encrypted.epochs.back();
                 std::cout << std::setprecision(6) << "    final accuracy " << finalEpoch.accuracy << ", loss "

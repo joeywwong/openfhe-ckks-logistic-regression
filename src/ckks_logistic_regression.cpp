@@ -1,4 +1,5 @@
-// Packed matrix-vector reductions adapted from enc_matrix.h in
+// Packed matrix-vector reductions and Nesterov updates adapted from
+// enc_matrix.h and lr_nag.cpp in
 // openfheorg/openfhe-logreg-training-examples (BSD-2-Clause).
 // Copyright (c) 2023, Duality Technologies Inc. All rights reserved.
 // See THIRD_PARTY_NOTICES.md for the retained upstream license.
@@ -68,6 +69,32 @@ labml::PlainModel DecryptModel(
     auto weights = DecryptVector(runtime, model.weights, featureCount);
     const double bias = DecryptVector(runtime, model.bias, 1).front();
     return {std::move(weights), bias};
+}
+
+EncryptedModel SimulatedRefreshModel(
+    const FheRuntime& runtime,
+    const EncryptedModel& model,
+    std::size_t featureCount) {
+    return EncryptModel(runtime, DecryptModel(runtime, model, featureCount));
+}
+
+EncryptedModel BootstrapModel(const FheRuntime& runtime, const EncryptedModel& model) {
+    const auto refresh = [&](const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& ciphertext) {
+        // The two optimizer states may consume different numbers of levels.
+        // Do not count OpenFHE 1.1.2's no-op bootstrap as a refresh.
+        if (ciphertext->GetLevel() <= runtime.bootstrapTriggerLevel) {
+            return ciphertext;
+        }
+        auto sparse = ciphertext->Clone();
+        sparse->SetSlots(runtime.bootstrapSlots);
+        auto refreshed = runtime.context->EvalBootstrap(sparse);
+        refreshed->SetSlots(runtime.slots);
+        if (refreshed->GetLevel() >= ciphertext->GetLevel()) {
+            throw std::runtime_error("Bootstrapping did not restore optimizer-state levels");
+        }
+        return refreshed;
+    };
+    return {refresh(model.weights), refresh(model.bias)};
 }
 
 lbcrypto::Ciphertext<lbcrypto::DCRTPoly> EvaluatePolynomialSigmoid(
@@ -240,7 +267,13 @@ EncryptedTrainingResult TrainEncrypted(
     const labml::PlaintextTrainingResult& plaintextReference,
     std::size_t epochs,
     double learningRate,
-    RefreshMethod refreshMethod) {
+    RefreshMethod refreshMethod,
+    const labml::OptimizerConfiguration& optimizer) {
+    labml::ValidateOptimizerConfiguration(optimizer);
+    RefreshMethodName(refreshMethod);
+    if (!std::isfinite(learningRate) || learningRate <= 0.0 || test.empty()) {
+        throw std::invalid_argument("Learning rate must be positive and finite; test data must not be empty");
+    }
     if (encryptedTrain.blocks.empty() || encryptedTrain.sampleCount != train.size() ||
         encryptedTrain.featureCount != labml::FeatureCount(train)) {
         throw std::invalid_argument("Encrypted and plaintext training sets must be non-empty and aligned");
@@ -249,18 +282,42 @@ EncryptedTrainingResult TrainEncrypted(
         throw std::invalid_argument("Plaintext reference must contain one record per requested epoch");
     }
 
+    if (plaintextReference.optimizer.method != optimizer.method ||
+        (optimizer.method == labml::Optimizer::NesterovAcceleratedGradient &&
+         plaintextReference.optimizer.momentum != optimizer.momentum)) {
+        throw std::invalid_argument("Plaintext reference must use the same optimizer and momentum");
+    }
+
+    const bool useMomentum =
+        optimizer.method == labml::Optimizer::NesterovAcceleratedGradient && optimizer.momentum > 0.0;
     const std::size_t featureCount = labml::FeatureCount(train);
     labml::PlainModel currentPlainModel{std::vector<double>(featureCount, 0.0), 0.0};
     auto encryptedModel = EncryptModel(runtime, currentPlainModel);
+    // Preserve the previous unaccelerated step, not the previous look-ahead.
+    EncryptedModel previousStep;
 
     EncryptedTrainingResult result;
     result.epochs.reserve(epochs);
     for (std::size_t epoch = 0; epoch < epochs; ++epoch) {
         std::cout << "    epoch " << (epoch + 1) << '/' << epochs << ": encrypted training" << std::flush;
         const auto homomorphicStart = Clock::now();
-        auto updatedModel = TrainOneEpoch(runtime, encryptedTrain, encryptedModel, learningRate);
+        const auto gradientStep = TrainOneEpoch(runtime, encryptedTrain, encryptedModel, learningRate);
+        auto updatedModel = gradientStep;
+        if (useMomentum) {
+            if (epoch > 0) {
+                updatedModel.weights = runtime.context->EvalAdd(
+                    gradientStep.weights, runtime.context->EvalMult(
+                        runtime.context->EvalSub(gradientStep.weights, previousStep.weights), optimizer.momentum));
+                updatedModel.bias = runtime.context->EvalAdd(
+                    gradientStep.bias, runtime.context->EvalMult(
+                        runtime.context->EvalSub(gradientStep.bias, previousStep.bias), optimizer.momentum));
+            }
+            previousStep = gradientStep;
+        }
         const auto homomorphicEnd = Clock::now();
-        const std::uint32_t levelBefore = ConsumedLevel(updatedModel);
+        const std::uint32_t levelBefore = useMomentum
+            ? std::max(ConsumedLevel(updatedModel), ConsumedLevel(previousStep))
+            : ConsumedLevel(updatedModel);
 
         double refreshSeconds = 0.0;
         double pairedSimulatedRefreshSeconds = 0.0;
@@ -271,6 +328,9 @@ EncryptedTrainingResult TrainEncrypted(
             const auto refreshStart = Clock::now();
             currentPlainModel = DecryptModel(runtime, updatedModel, featureCount);
             encryptedModel = EncryptModel(runtime, currentPlainModel);
+            if (useMomentum) {
+                previousStep = SimulatedRefreshModel(runtime, previousStep, featureCount);
+            }
             const auto refreshEnd = Clock::now();
             refreshSeconds = SecondsBetween(refreshStart, refreshEnd);
             pairedSimulatedRefreshSeconds = refreshSeconds;
@@ -283,23 +343,22 @@ EncryptedTrainingResult TrainEncrypted(
             // discard its refreshed result. This is a paired refresh benchmark;
             // the real-mode model below still comes only from EvalBootstrap.
             const auto simulatedStart = Clock::now();
-            const auto comparisonPlainModel = DecryptModel(runtime, updatedModel, featureCount);
-            const auto comparisonEncryptedModel = EncryptModel(runtime, comparisonPlainModel);
+            const auto comparisonEncryptedModel = SimulatedRefreshModel(runtime, updatedModel, featureCount);
             static_cast<void>(comparisonEncryptedModel);
+            if (useMomentum) {
+                const auto comparisonPreviousStep = SimulatedRefreshModel(runtime, previousStep, featureCount);
+                static_cast<void>(comparisonPreviousStep);
+            }
             const auto simulatedEnd = Clock::now();
             pairedSimulatedRefreshSeconds = SecondsBetween(simulatedStart, simulatedEnd);
 
             const auto refreshStart = Clock::now();
             // As in the official example, only the periodic model is sparsely
             // bootstrapped. The matrix inputs stay fully packed and unchanged.
-            auto sparseWeights = updatedModel.weights->Clone();
-            auto sparseBias = updatedModel.bias->Clone();
-            sparseWeights->SetSlots(runtime.bootstrapSlots);
-            sparseBias->SetSlots(runtime.bootstrapSlots);
-            encryptedModel.weights = runtime.context->EvalBootstrap(sparseWeights);
-            encryptedModel.bias    = runtime.context->EvalBootstrap(sparseBias);
-            encryptedModel.weights->SetSlots(runtime.slots);
-            encryptedModel.bias->SetSlots(runtime.slots);
+            encryptedModel = BootstrapModel(runtime, updatedModel);
+            if (useMomentum) {
+                previousStep = BootstrapModel(runtime, previousStep);
+            }
             const auto refreshEnd = Clock::now();
             refreshSeconds = SecondsBetween(refreshStart, refreshEnd);
             refreshed = true;
@@ -321,7 +380,9 @@ EncryptedTrainingResult TrainEncrypted(
             metricDecryptionSeconds = SecondsBetween(metricDecryptStart, metricDecryptEnd);
         }
 
-        const std::uint32_t levelAfter = ConsumedLevel(encryptedModel);
+        const std::uint32_t levelAfter = useMomentum
+            ? std::max(ConsumedLevel(encryptedModel), ConsumedLevel(previousStep))
+            : ConsumedLevel(encryptedModel);
         const double homomorphicSeconds = SecondsBetween(homomorphicStart, homomorphicEnd);
         const double accuracy = labml::Accuracy(currentPlainModel, test);
         const double loss = labml::ExactLogLoss(currentPlainModel, train);
