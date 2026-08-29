@@ -28,7 +28,10 @@ struct CkksConfiguration {
     std::uint32_t rowWidth{16};
     std::uint32_t bootstrapSlots{16};
     std::vector<std::uint32_t> levelBudget{3, 3};
-    std::uint32_t levelsAvailableAfterBootstrap{10};
+    // The degree-59 EvalLogistic circuit is substantially deeper than the
+    // former cubic. Keep enough levels after sparse bootstrapping for one full
+    // packed gradient/update circuit before the next refresh.
+    std::uint32_t levelsAvailableAfterBootstrap{16};
 };
 
 struct FheRuntime {

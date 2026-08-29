@@ -1,5 +1,9 @@
 # Packed CKKS logistic-regression results
 
+> Historical baseline: these measurements predate the degree-59 Chebyshev
+> sigmoid change. They used the former cubic sigmoid and multiplicative depth
+> 29; their timings and model values do not describe the current circuit.
+
 Measured on 2026-08-27. This is a **four-epoch run on both complete
 lab datasets**, with both refresh methods. The program's default remains 100
 epochs; this report does not claim that 100 encrypted epochs were measured.
@@ -20,11 +24,13 @@ multiple blocks and an explicit valid-row mask for the separate bias gradient.
 Every actual training sample contributes exactly once; padded rows do not
 contribute, and the gradient denominator is the actual training count.
 
-Only the ciphertext layout and its encrypted reductions were changed. The
+For this historical run, only the ciphertext layout and its encrypted
+reductions were changed. The
 datasets, preprocessing, seed-4 70/30 split, zero initialization, full-batch
 gradient descent, learning rate 0.01, cubic sigmoid, and separate encrypted
-weights and bias are retained. The upstream Nesterov optimizer, Chebyshev
-sigmoid, and dataset were **not** imported. Its example is illustrative, not an
+weights and bias were retained. The upstream Nesterov optimizer, Chebyshev
+sigmoid, and dataset were **not** imported at that time. Its example is
+illustrative, not an
 optimized benchmark; the measurements below are for this local adaptation.
 
 See [DESIGN.md](DESIGN.md#packed-ciphertext-layout) for the layout and
@@ -70,7 +76,7 @@ discarded paired-refresh measurement.
 
 Accuracy is evaluated on the held-out plaintext test set after decrypting the
 model. Loss is exact-sigmoid binary cross-entropy on the plaintext training
-set; the encrypted training update itself still uses the lab's cubic sigmoid.
+set; the encrypted training update itself used the lab's cubic sigmoid.
 
 The unchanged plaintext reference ends at accuracy 99.6667% and loss
 0.6563837929 for LogReg, and accuracy 68.8623% and loss 0.6900177754 for

@@ -220,7 +220,8 @@ int main(int argc, char* argv[]) {
         WriteCsvHeader(output);
 
         std::cout << "OpenFHE port of the TenSEAL encrypted logistic-regression lab\n"
-                  << "Fixed lab settings: shuffled 70/30 split, seed 4, cubic sigmoid, full-batch training\n"
+                  << "Fixed settings: shuffled 70/30 split, seed 4, degree-59 Chebyshev sigmoid, "
+                     "full-batch training\n"
                   << "Optimizer: " << labml::OptimizerName(options.optimizer.method)
                   << ", momentum: " << (options.optimizer.method == labml::Optimizer::NesterovAcceleratedGradient
                       ? options.optimizer.momentum : 0.0) << "\n"

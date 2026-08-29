@@ -2,6 +2,7 @@
 
 > Historical **unpacked** implementation. For the sample-packing update and
 > new four-epoch measurements, see [PACKED_RESULTS.md](PACKED_RESULTS.md).
+> This report also predates the degree-59 Chebyshev sigmoid change.
 
 These historical values were measured on the complete lab datasets, without
 subsampling or sample packing. The current `results/benchmark.csv` contains a

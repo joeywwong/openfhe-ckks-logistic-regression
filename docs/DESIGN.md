@@ -3,8 +3,10 @@
 ## Scope
 
 This project ports the original TenSEAL experiment to OpenFHE. By default it
-retains the lab's optimizer, split, preprocessing, sigmoid approximation, and
-metrics. Nesterov accelerated gradient is available as an optional optimizer.
+retains the lab's optimizer, split, preprocessing, and metrics. The lab's cubic
+sigmoid is replaced by the official OpenFHE example's degree-59 Chebyshev
+approximation. Nesterov accelerated gradient is available as an optional
+optimizer.
 At the user's request, the original ciphertext-per-sample layout is now replaced
 by sample packing adapted from the official OpenFHE example.
 Both refresh methods use the same packed circuit.
@@ -20,7 +22,7 @@ Both refresh methods use the same packed circuit.
 | Default run | 100 epochs and learning rate 0.01 |
 | Encrypted input | Features and labels remain encrypted; multiple samples now share each block |
 | Model layout | Encrypted weights and encrypted bias are separate ciphertexts |
-| Forward sigmoid | `0.5 + 0.197*z - 0.004*z^3` |
+| Forward sigmoid | OpenFHE degree-59 Chebyshev approximation on `[-16, 16]` |
 | Gradient | `(prediction-label)*x` and `(prediction-label)` for bias |
 | Accuracy | Decrypt model, classify the plaintext test set at linear score zero |
 | Loss | Exact logistic sigmoid and binary cross-entropy on plaintext training data |
@@ -51,7 +53,7 @@ valid:    [1,  1   | 1,  1   | 1,  1   | 0,0 | ...]
 
 1. Multiply features by repeated weights. `EvalSumCols` sums feature columns
    independently within each row and replicates each dot product over its row.
-2. Add the encrypted bias, apply the unchanged cubic sigmoid, and subtract
+2. Add the encrypted bias, apply `EvalLogistic(score, -16, 16, 59)`, and subtract
    repeated encrypted labels.
 3. Multiply errors by feature values. `EvalSumRows` sums sample rows for each
    feature column, producing a repeated weight-gradient row.
@@ -63,9 +65,9 @@ valid:    [1,  1   | 1,  1   | 1,  1   | 0,0 | ...]
 
 This extends the upstream layout to multiple blocks without changing to
 mini-batch SGD. Optional Nesterov acceleration uses the same full-batch
-gradient. Pre-scaled data, Chebyshev sigmoid, and the upstream dataset are not
-adopted. The upstream code is explicitly illustrative, not a performance
-benchmark; measurements here refer only to this local adaptation.
+gradient. The upstream Chebyshev sigmoid is adopted; pre-scaled data and the
+upstream dataset are not. The upstream code is explicitly illustrative, not a
+performance benchmark; measurements here refer only to this local adaptation.
 
 LogReg uses width 2, 1,024 rows/block, one block and two input ciphertexts.
 Framingham uses width 16, 128 rows/block, seven blocks and 14 input ciphertexts.
@@ -178,6 +180,11 @@ For each dataset, the two refresh methods use one common context. It
 uses 2,048 data slots and 16 sparse model-bootstrap slots, `FLEXIBLEAUTO`,
 59-bit scaling moduli, a 60-bit first
 modulus, `HYBRID` key switching, level budget `{3,3}`, and ring dimension 4096.
+The degree-59 circuit reserves 16 levels after bootstrapping, for total
+multiplicative depth 35 and a real-bootstrap trigger at consumed level 19.
+The four extra towers beyond the 12 arithmetic levels are required for
+OpenFHE 1.1.2 to bootstrap the level-30/31 GD/NAG ciphertexts without exhausting
+the DCRT representation.
 The small `HEStd_NotSet` ring is taken from OpenFHE 1.1.2's bootstrapping example
 and makes no production security claim. These OpenFHE bootstrapping parameters
 replace the TenSEAL-specific modulus-chain syntax; the default GD experiment

@@ -1,6 +1,7 @@
 #include "openfhe_lab/dataset.hpp"
 #include "openfhe_lab/logistic_regression.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -25,6 +26,29 @@ void RequireInvalid(Function function) {
         rejected = true;
     }
     Require(rejected, "Invalid training configuration was accepted");
+}
+
+void CheckChebyshevSigmoid() {
+    Require(labml::kSigmoidApproximationLowerBound == -16.0 &&
+                labml::kSigmoidApproximationUpperBound == 16.0 &&
+                labml::kSigmoidApproximationDegree == 59,
+            "Sigmoid approximation must match the official OpenFHE example");
+
+    double maximumError = 0.0;
+    for (int index = 0; index <= 3200; ++index) {
+        const double score = labml::kSigmoidApproximationLowerBound +
+            (labml::kSigmoidApproximationUpperBound -
+             labml::kSigmoidApproximationLowerBound) *
+                static_cast<double>(index) / 3200.0;
+        const double approximate = labml::PolynomialSigmoid(score);
+        maximumError = std::max(
+            maximumError, std::abs(approximate - labml::ExactSigmoid(score)));
+        Require(std::abs(
+                    approximate + labml::PolynomialSigmoid(-score) - 1.0) < 1e-12,
+                "Chebyshev sigmoid must preserve logistic symmetry");
+    }
+    Require(maximumError < 6e-6,
+            "Degree-59 Chebyshev sigmoid exceeded its expected error on [-16, 16]");
 }
 
 void CheckNesterovUpdates(const labml::Dataset& data) {
@@ -107,8 +131,9 @@ void CheckNesterovUpdates(const labml::Dataset& data) {
 int main(int argc, char* argv[]) {
     try {
         Require(argc == 3, "Expected LogReg and Framingham CSV paths");
+        CheckChebyshevSigmoid();
         Require(std::abs(labml::PolynomialSigmoid(0.0) - 0.5) < 1e-12,
-                "Polynomial sigmoid must map zero to 0.5");
+                "Chebyshev sigmoid must map zero to 0.5");
         Require(std::abs(labml::ExactSigmoid(0.0) - 0.5) < 1e-12,
                 "Exact sigmoid must map zero to 0.5");
 

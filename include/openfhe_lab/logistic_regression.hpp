@@ -3,6 +3,7 @@
 #include "openfhe_lab/dataset.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -40,7 +41,15 @@ struct PlaintextTrainingResult {
     OptimizerConfiguration optimizer;
 };
 
-// The training circuit uses the same degree-three approximation as the lab.
+// Match the official OpenFHE logistic-regression example: approximate the
+// logistic function with a degree-59 Chebyshev interpolant over [-16, 16].
+inline constexpr double kSigmoidApproximationLowerBound{-16.0};
+inline constexpr double kSigmoidApproximationUpperBound{16.0};
+inline constexpr std::uint32_t kSigmoidApproximationDegree{59};
+
+// Plaintext evaluation of the same Chebyshev series used by OpenFHE's
+// EvalLogistic. This keeps the reference optimizer aligned with the encrypted
+// training circuit.
 double PolynomialSigmoid(double score);
 
 // The lab reported cross-entropy with the exact sigmoid after decrypting the

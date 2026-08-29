@@ -100,11 +100,11 @@ EncryptedModel BootstrapModel(const FheRuntime& runtime, const EncryptedModel& m
 lbcrypto::Ciphertext<lbcrypto::DCRTPoly> EvaluatePolynomialSigmoid(
     const FheRuntime& runtime,
     const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& score) {
-    const auto squared = runtime.context->EvalMult(score, score);
-    const auto cubed   = runtime.context->EvalMult(squared, score);
-    const auto linear  = runtime.context->EvalMult(score, 0.197);
-    const auto cubic   = runtime.context->EvalMult(cubed, -0.004);
-    return runtime.context->EvalAdd(runtime.context->EvalAdd(linear, cubic), 0.5);
+    return runtime.context->EvalLogistic(
+        score,
+        labml::kSigmoidApproximationLowerBound,
+        labml::kSigmoidApproximationUpperBound,
+        labml::kSigmoidApproximationDegree);
 }
 
 EncryptedModel TrainOneEpoch(

@@ -4,6 +4,8 @@
 // See THIRD_PARTY_NOTICES.md for the retained upstream license.
 #include "openfhe_lab/logistic_regression.hpp"
 
+#include "math/chebyshev.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -17,6 +19,15 @@ using Clock = std::chrono::steady_clock;
 
 double SecondsBetween(const Clock::time_point& start, const Clock::time_point& end) {
     return std::chrono::duration<double>(end - start).count();
+}
+
+const std::vector<double>& SigmoidChebyshevCoefficients() {
+    static const auto coefficients = lbcrypto::EvalChebyshevCoefficients(
+        [](double value) { return 1.0 / (1.0 + std::exp(-value)); },
+        kSigmoidApproximationLowerBound,
+        kSigmoidApproximationUpperBound,
+        kSigmoidApproximationDegree);
+    return coefficients;
 }
 
 }  // namespace
@@ -40,7 +51,22 @@ void ValidateOptimizerConfiguration(const OptimizerConfiguration& configuration)
 }
 
 double PolynomialSigmoid(double score) {
-    return 0.5 + 0.197 * score - 0.004 * score * score * score;
+    const auto& coefficients = SigmoidChebyshevCoefficients();
+    const double normalized = -1.0 + 2.0 *
+        (score - kSigmoidApproximationLowerBound) /
+        (kSigmoidApproximationUpperBound - kSigmoidApproximationLowerBound);
+
+    // Clenshaw recurrence for c[0]/2 + sum(c[k] * T_k(normalized)).
+    // EvalChebyshevCoefficients and EvalLogistic use this same c[0]/2
+    // convention in OpenFHE 1.1.2.
+    double next = 0.0;
+    double nextNext = 0.0;
+    for (std::size_t index = coefficients.size() - 1; index > 0; --index) {
+        const double current = 2.0 * normalized * next - nextNext + coefficients[index];
+        nextNext = next;
+        next = current;
+    }
+    return normalized * next - nextNext + coefficients.front() / 2.0;
 }
 
 double ExactSigmoid(double score) {
