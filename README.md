@@ -182,6 +182,60 @@ GD). Existing result reports describe GD, not NAG. The earlier
 [`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) for the earlier packed GD run;
 [`docs/RESULTS.md`](docs/RESULTS.md) is the historical unpacked report.
 
+### Controlled GD-versus-NAG comparison
+
+Use the paired runner to compare convergence and runtime under identical data
+splits, initialization, learning rate, epoch count, datasets, and refresh
+methods. It preserves every raw per-epoch CSV and alternates whether GD or NAG
+runs first, reducing systematic warm-cache and first-run bias. For a short
+verification experiment:
+
+```bash
+REPEATS=3 EPOCHS=4 DATASET=all REFRESH=both \
+  ./scripts/run_gd_nag_comparison_wsl.sh
+```
+
+The defaults are `REPEATS=3`, `EPOCHS=100`, `MOMENTUM=0.1`,
+`LEARNING_RATE=0.01`, `DATASET=all`, and `REFRESH=both`. A full run includes
+real CKKS bootstrapping and can take a long time. `RESULT_DIR` selects an output
+directory; otherwise a timestamped directory is created under `results/`.
+Set `BUILD_AND_TEST=0` to reuse an existing successful build.
+
+Each result directory contains:
+
+- `raw/run_NNN_gd.csv` and `raw/run_NNN_nag.csv`: original per-epoch results;
+- `per_run_metrics.csv`: final/minimum loss, final accuracy, timing breakdown,
+  refresh count, CKKS levels, and encrypted/plaintext model error;
+- `per_run_comparison.csv`: fixed-epoch differences and the first NAG epoch/time
+  that reaches the matching GD run's final loss;
+- `aggregate_epoch_metrics.csv`: mean and sample standard deviation per epoch
+  for plotting loss/accuracy against epochs or cumulative training time;
+- `aggregate_optimizer_metrics.csv`: mean and sample standard deviation for
+  every optimizer metric;
+- `aggregate_comparison.csv`: mean GD/NAG differences, fixed-epoch runtime
+  ratio, target-loss success rate, epoch savings, and target-loss speedup.
+
+`experiment_config.csv` records the controlled inputs. Reported total time is
+the sum of encrypted arithmetic and optimizer-state refresh time; common
+context setup and data encryption are intentionally excluded. Metric decryption
+and the discarded paired-refresh measurement remain separate columns.
+
+In the comparison files, positive `nag_final_loss_improvement` means NAG has
+lower loss. Runtime ratios and speedups are `GD / NAG`, so values greater than
+one favor NAG. Test accuracy should be interpreted alongside loss because its
+discrete threshold can remain unchanged while optimization improves.
+
+Existing raw result pairs can be summarized again without rerunning OpenFHE:
+
+```bash
+python3 scripts/summarize_gd_nag.py \
+  --input-dir results/gd_nag_EXPERIMENT/raw \
+  --output-dir results/gd_nag_EXPERIMENT
+```
+
+See [`docs/GD_NAG_COMPARISON.md`](docs/GD_NAG_COMPARISON.md) for the controlled
+methodology and the checked-in two-repeat, four-epoch smoke measurement.
+
 ## Reported metrics
 
 - encrypted arithmetic time;

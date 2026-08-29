@@ -1,0 +1,2 @@
+repeats,epochs,learning_rate,momentum,dataset,refresh
+2,4,0.01,0.1,logreg,simulated
