@@ -8,3 +8,5 @@
 - [ ] Compare NAG and GD convergence and total runtime in repeated, controlled runs.
 - [ ] Try different sigmoid approximations.
 - [ ] Dockerize the project for reproducible builds and execution.
+- [ ] merge feature/compare-GD-NAG
+- [ ] merge feature/approximate-sigmoid
