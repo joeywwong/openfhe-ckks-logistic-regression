@@ -50,8 +50,7 @@ workflow with:
 
 At epoch four, NAG's loss was lower by `0.002842`, approximately 0.43% of GD's
 final loss. NAG reached GD's final-loss target at epoch four, so this short run
-showed no epoch saving. Its fixed-epoch `GD / NAG` runtime ratio was `0.906`;
-equivalently, NAG took about 11.6% more training time. The extra cost is
+showed no epoch saving. The mean encrypted training times were 8.443 s for GD and 9.420 s for NAG, so NAG took about 11.6% more time in this smoke experiment. The extra cost is
 consistent with NAG retaining and refreshing both theta and phi model states.
 
 This is a smoke measurement, not a performance conclusion: two timing samples
