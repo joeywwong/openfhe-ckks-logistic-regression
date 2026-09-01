@@ -8,7 +8,8 @@ configuration, packing scheme, and refresh method constant.
 ## Controlled workflow
 
 `scripts/run_gd_nag_comparison_wsl.sh` runs both optimizers in every repeat and
-alternates their order. Each optimizer uses a new process, but setup and input
+alternates their order. The default four repeats give each optimizer two
+first-position runs, which gives a balanced result. Each optimizer uses a new process, but setup and input
 encryption are excluded from the reported training time. The comparison keeps
 the following separate:
 
@@ -56,10 +57,10 @@ consistent with NAG retaining and refreshing both theta and phi model states.
 This is a smoke measurement, not a performance conclusion: two timing samples
 and four epochs are insufficient to establish acceleration. The intended study
 uses both datasets, simulated and real bootstrapping, 100 epochs, and at least
-three repeats:
+four repeats with an even repeat count to balance optimizer order:
 
 ```bash
-REPEATS=3 EPOCHS=100 DATASET=all REFRESH=both \
+REPEATS=4 EPOCHS=100 DATASET=all REFRESH=both \
   ./scripts/run_gd_nag_comparison_wsl.sh
 ```
 

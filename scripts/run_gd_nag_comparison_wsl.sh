@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EPOCHS="${EPOCHS:-100}"
-REPEATS="${REPEATS:-3}"
+REPEATS="${REPEATS:-4}"
 MOMENTUM="${MOMENTUM:-0.1}"
 LEARNING_RATE="${LEARNING_RATE:-0.01}"
 DATASET="${DATASET:-all}"

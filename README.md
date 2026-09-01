@@ -143,15 +143,16 @@ the CMake 3.5.1 compatibility branch has not been executed locally.
 Use the paired runner to compare convergence and runtime under identical data
 splits, initialization, learning rate, epoch count, datasets, and refresh
 methods. It preserves every raw per-epoch CSV and alternates whether GD or NAG
-runs first, reducing systematic warm-cache and first-run bias. For a short
-verification experiment:
+runs first, reducing systematic warm-cache and first-run bias. With the default
+four repeats, each optimizer runs first twice, which gives a balanced result. For a short verification
+experiment:
 
 ```bash
-REPEATS=3 EPOCHS=4 DATASET=all REFRESH=both \
+REPEATS=4 EPOCHS=4 DATASET=all REFRESH=both \
   ./scripts/run_gd_nag_comparison_wsl.sh
 ```
 
-The defaults are `REPEATS=3`, `EPOCHS=100`, `MOMENTUM=0.1`,
+The defaults are `REPEATS=4`, `EPOCHS=100`, `MOMENTUM=0.1`,
 `LEARNING_RATE=0.01`, `DATASET=all`, and `REFRESH=both`. A full run includes
 real CKKS bootstrapping and can take a long time. `RESULT_DIR` selects an output
 directory; otherwise a timestamped directory is created under `results/`.
