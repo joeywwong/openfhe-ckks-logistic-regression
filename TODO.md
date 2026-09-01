@@ -10,5 +10,5 @@
 - [ ] Collect and report full repeated 100-epoch GD-vs-NAG encrypted measurements.
 - [ ] Try different sigmoid approximations.
 - [ ] Dockerize the project for reproducible builds and execution.
-- [ ] merge feature/compare-GD-NAG
+- [x] merge feature/compare-GD-NAG
 - [ ] merge feature/approximate-sigmoid
