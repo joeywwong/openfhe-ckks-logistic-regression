@@ -74,7 +74,7 @@ The first epoch omits extrapolation because $\beta_0=0$.
 
 Select `--optimizer nag`; `--momentum` defaults to `0.1`, must be finite in
 `[0, 1)`, and `0` reduces to GD. The cubic sigmoid, full-batch averaging, and
-learning rate are unchanged. 
+learning rate are unchanged.
 
 #### Convergence and encrypted-computation trade-offs
 Compared with gradient descent (GD), nonzero-momentum NAG is intended to accelerate convergence and it may reach a target loss in fewer epochs (although acceleration is not guaranteed for this fixed-momentum implementation and the same learning rate as GD.). But in encrypted training, NAG has these tradeoffs:
