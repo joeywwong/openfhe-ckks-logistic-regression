@@ -42,7 +42,7 @@ The upstream Chebyshev sigmoid is not adopted.
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the one-to-one mapping and timing
 definitions.
 
-## Nesterov accelerated gradient
+## Nesterov accelerated gradient (NAG)
 
 NAG evaluates the gradient at a **look-ahead model**, extrapolated using recent
 parameter changes, so the gradient can correct the momentum direction. 
@@ -74,16 +74,26 @@ The first epoch omits extrapolation because $\beta_0=0$.
 
 Select `--optimizer nag`; `--momentum` defaults to `0.1`, must be finite in
 `[0, 1)`, and `0` reduces to GD. The cubic sigmoid, full-batch averaging, and
-learning rate are unchanged. In a 100-epoch experiment, NAG showed faster 
-loss reduction than gradient descent under the tested configuration. 
-Faster convergence is not guaranteed for this fixed-momentum, 
-approximate-gradient implementation.
+learning rate are unchanged. 
 
-With nonzero momentum, encrypted training retains four ciphertexts (weights
-and bias for both model states $\theta_t$ and $\phi_t$), preserving both states through simulated or real
-bootstrapping. The extra arithmetic and refresh work can outweigh any reduction
-in epochs. Larger momentum can also push scores outside the cubic sigmoid's
-useful range.
+#### Convergence and encrypted-computation trade-offs
+Compared with gradient descent (GD), nonzero-momentum NAG is intended to accelerate convergence and it may reach a target loss in fewer epochs (although acceleration is not guaranteed for this fixed-momentum implementation and the same learning rate as GD.). But in encrypted training, NAG has these tradeoffs:
+
+- **Encrypted arithmetic:** After the first epoch, it performs additional encrypted arithmetic: two
+  scalar multiplications, two additions, and two subtractions for weights and
+  bias.
+- **Model state:** It retains two encrypted model states, $\theta_t$ and $\phi_t$, each
+  comprising weights and bias, versus GD's single model state.
+- **Level consumption:** Its additional scalar multiplications may consume CKKS levels faster than GD
+  and may therefore trigger real bootstrapping earlier.
+- **Bootstrapping cost:** Under the current representation, refreshing both NAG states requires four
+  bootstraps—weights and bias for each state—versus GD's two. This overhead is
+  not inherent to NAG: the [official OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples#sparse-packing) packs both NAG states into one ciphertext and refreshes them with a single
+  bootstrap. See [advanced CKKS bootstrapping](https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/advanced-ckks-bootstrapping.cpp) for more information.
+
+In a 100-epoch experiment, NAG showed faster loss reduction than GD under the
+tested configuration. Larger momentum can also push scores outside the cubic
+sigmoid's useful range.
 
 ## Sample packing
 
