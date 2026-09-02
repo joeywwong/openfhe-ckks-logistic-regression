@@ -3,10 +3,10 @@
 ## Scope
 
 This project ports the original TenSEAL experiment to OpenFHE. By default it
-retains the lab's optimizer, split, preprocessing, and metrics. The lab's cubic
-sigmoid is replaced by the official OpenFHE example's degree-59 Chebyshev
-approximation. Nesterov accelerated gradient is available as an optional
-optimizer.
+retains the lab's optimizer, split, preprocessing, and metrics. Training can
+use the original lab/main-branch cubic sigmoid (the default) or the official
+OpenFHE example's degree-59 Chebyshev approximation. Nesterov accelerated gradient is
+available as an optional optimizer.
 At the user's request, the original ciphertext-per-sample layout is now replaced
 by sample packing adapted from the official OpenFHE example.
 Both refresh methods use the same packed circuit.
@@ -22,7 +22,7 @@ Both refresh methods use the same packed circuit.
 | Default run | 100 epochs and learning rate 0.01 |
 | Encrypted input | Features and labels remain encrypted; multiple samples now share each block |
 | Model layout | Encrypted weights and encrypted bias are separate ciphertexts |
-| Forward sigmoid | OpenFHE degree-59 Chebyshev approximation on `[-16, 16]` |
+| Forward sigmoid | `--sigmoid cubic` (default): lab polynomial `0.5 + 0.197*x - 0.004*x^3`; `--sigmoid chebyshev`: degree 59 on `[-16, 16]` |
 | Gradient | `(prediction-label)*x` and `(prediction-label)` for bias |
 | Accuracy | Decrypt model, classify the plaintext test set at linear score zero |
 | Loss | Exact logistic sigmoid and binary cross-entropy on plaintext training data |
@@ -53,8 +53,9 @@ valid:    [1,  1   | 1,  1   | 1,  1   | 0,0 | ...]
 
 1. Multiply features by repeated weights. `EvalSumCols` sums feature columns
    independently within each row and replicates each dot product over its row.
-2. Add the encrypted bias, apply `EvalLogistic(score, -16, 16, 59)`, and subtract
-   repeated encrypted labels.
+2. Add the encrypted bias, apply the selected sigmoid, and subtract repeated
+   encrypted labels. Chebyshev uses `EvalLogistic(score, -16, 16, 59)`; cubic
+   uses the original `0.5 + 0.197*score - 0.004*score^3` multiplication circuit.
 3. Multiply errors by feature values. `EvalSumRows` sums sample rows for each
    feature column, producing a repeated weight-gradient row.
 4. Mask errors by public row occupancy and use `EvalSumRows` for bias gradients.
@@ -65,8 +66,8 @@ valid:    [1,  1   | 1,  1   | 1,  1   | 0,0 | ...]
 
 This extends the upstream layout to multiple blocks without changing to
 mini-batch SGD. Optional Nesterov acceleration uses the same full-batch
-gradient. The upstream Chebyshev sigmoid is adopted; pre-scaled data and the
-upstream dataset are not. The upstream code is explicitly illustrative, not a
+gradient. The upstream Chebyshev sigmoid is selectable alongside the lab
+cubic; pre-scaled data and the upstream dataset are not adopted. The upstream code is explicitly illustrative, not a
 performance benchmark; measurements here refer only to this local adaptation.
 
 LogReg uses width 2, 1,024 rows/block, one block and two input ciphertexts.
@@ -83,8 +84,23 @@ for each optimizer state.
 
 Packing changes floating-point summation order, not the full-batch formula.
 Integration tests compare every encrypted epoch with the matching plaintext
-optimizer, covering partial blocks, both feature widths, multiple blocks, and
-training after the first real bootstrap.
+optimizer and sigmoid, covering partial blocks, both feature widths, multiple
+blocks, and training after the first real bootstrap.
+
+## Sigmoid selection
+
+`labml::SigmoidApproximation` selects `Chebyshev` or `Cubic`. Pass it as the
+last argument to `TrainPlaintext` (after the optimizer) and set
+`CkksConfiguration::sigmoid` before `CreateFheRuntime`. The runtime binds the
+encrypted circuit to the corresponding depth. `TrainEncrypted` rejects a
+plaintext reference that records a different approximation. API calls
+without a selection use the lab cubic.
+
+The plaintext Chebyshev path uses the same OpenFHE coefficients as
+`EvalLogistic`, evaluated with Clenshaw recurrence. The cubic path uses the
+exact lab coefficients in both trainers, without clipping or a new fit.
+Only the training gradient uses this approximation; loss and accuracy retain
+the lab's evaluation rules.
 
 ## Nesterov optimizer state
 
@@ -107,7 +123,7 @@ Momentum defaults to 0.1 and must be finite in [0, 1). Zero momentum takes the
 GD circuit without an extra encrypted state. GD remains the default so earlier
 lab measurements are reproducible. The CLI passes identical settings to both
 trainers; the encrypted API also rejects a reference from a different optimizer
-or momentum. CSV rows append `optimizer` and `momentum` (zero for GD).
+or momentum. CSV rows append `optimizer`, `momentum` (zero for GD), and `sigmoid`.
 
 ## Framingham preprocessing
 
@@ -184,7 +200,10 @@ The degree-59 circuit reserves 16 levels after bootstrapping, for total
 multiplicative depth 35 and a real-bootstrap trigger at consumed level 19.
 The four extra towers beyond the 12 arithmetic levels are required for
 OpenFHE 1.1.2 to bootstrap the level-30/31 GD/NAG ciphertexts without exhausting
-the DCRT representation.
+the DCRT representation. The cubic option restores the main-branch reserve of
+10 levels and total depth 29, with the same trigger at level 19. In
+`CkksConfiguration`, `levelsAvailableAfterBootstrap = 0` selects these defaults;
+a nonzero value explicitly overrides the reserve for custom experiments.
 The small `HEStd_NotSet` ring is taken from OpenFHE 1.1.2's bootstrapping example
 and makes no production security claim. These OpenFHE bootstrapping parameters
 replace the TenSEAL-specific modulus-chain syntax; the default GD experiment

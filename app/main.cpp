@@ -24,6 +24,7 @@ struct Options {
     std::size_t epochs{100};
     double learningRate{0.01};
     labml::OptimizerConfiguration optimizer;
+    labml::SigmoidApproximation sigmoid{labml::SigmoidApproximation::Cubic};
     std::string outputPath;
     bool showHelp{false};
 };
@@ -42,6 +43,7 @@ void PrintUsage(const char* program) {
         << "  --learning-rate X                Lab default is 0.01\n"
         << "  --optimizer gd|nag               Full-batch optimizer (default: gd)\n"
         << "  --momentum X                     NAG coefficient in [0, 1) (default: 0.1)\n"
+        << "  --sigmoid chebyshev|cubic        Sigmoid approximation (default: cubic)\n"
         << "  --output PATH                    Per-epoch CSV output path\n"
         << "  --help                           Show this message\n";
 }
@@ -81,6 +83,17 @@ Options ParseArguments(int argc, char* argv[]) {
                 throw std::invalid_argument("--optimizer must be gd or nag");
             }
         }
+        else if (flag == "--sigmoid") {
+            if (value == "chebyshev") {
+                options.sigmoid = labml::SigmoidApproximation::Chebyshev;
+            }
+            else if (value == "cubic") {
+                options.sigmoid = labml::SigmoidApproximation::Cubic;
+            }
+            else {
+                throw std::invalid_argument("--sigmoid must be chebyshev or cubic");
+            }
+        }
         else if (flag == "--momentum") {
             std::size_t parsed = 0;
             options.optimizer.momentum = std::stod(value, &parsed);
@@ -108,7 +121,8 @@ Options ParseArguments(int argc, char* argv[]) {
     if (options.outputPath.empty()) {
         options.outputPath = std::string(OPENFHE_LAB_SOURCE_DIR) + "/results/" +
             (options.optimizer.method == labml::Optimizer::NesterovAcceleratedGradient
-                ? "benchmark_nag.csv" : "benchmark_packed.csv");
+                ? "benchmark_nag_" : "benchmark_packed_") +
+            labml::SigmoidApproximationName(options.sigmoid) + ".csv";
     }
     return options;
 }
@@ -147,13 +161,16 @@ labml::Dataset LoadDataset(labml::DatasetKind kind) {
 void WriteCsvHeader(std::ofstream& output) {
     output << "dataset,method,epoch,homomorphic_seconds,refresh_seconds,metric_decryption_seconds,"
               "paired_simulated_refresh_seconds,seconds_per_epoch,accuracy,loss,"
-              "max_plaintext_model_error,refreshed,level_before_refresh,level_after_refresh,optimizer,momentum\n";
+              "max_plaintext_model_error,refreshed,level_before_refresh,level_after_refresh,optimizer,momentum,sigmoid\n";
 }
 
-void WriteOptimizerColumns(std::ofstream& output, const labml::OptimizerConfiguration& optimizer) {
+void WriteTrainingColumns(
+    std::ofstream& output,
+    const labml::OptimizerConfiguration& optimizer,
+    labml::SigmoidApproximation sigmoid) {
     output << ',' << labml::OptimizerName(optimizer.method) << ','
            << (optimizer.method == labml::Optimizer::NesterovAcceleratedGradient ? optimizer.momentum : 0.0)
-           << '\n';
+           << ',' << labml::SigmoidApproximationName(sigmoid) << '\n';
 }
 
 void WritePlaintextRows(
@@ -164,7 +181,7 @@ void WritePlaintextRows(
         output << dataset << ",plaintext," << epoch.epoch << ',' << epoch.seconds
                << ",0,0,0," << epoch.seconds << ',' << epoch.accuracy << ',' << epoch.loss
                << ",0,0,0,0";
-        WriteOptimizerColumns(output, result.optimizer);
+        WriteTrainingColumns(output, result.optimizer, result.sigmoid);
     }
 }
 
@@ -173,6 +190,7 @@ void WriteEncryptedRows(
     const std::string& dataset,
     labfhe::RefreshMethod method,
     const labml::OptimizerConfiguration& optimizer,
+    labml::SigmoidApproximation sigmoid,
     const labfhe::EncryptedTrainingResult& result) {
     for (const auto& epoch : result.epochs) {
         output << dataset << ',' << labfhe::RefreshMethodName(method) << ',' << epoch.epoch << ','
@@ -182,7 +200,7 @@ void WriteEncryptedRows(
                << epoch.accuracy << ',' << epoch.loss << ',' << epoch.maximumPlaintextModelError
                << ',' << (epoch.refreshed ? 1 : 0) << ',' << epoch.levelBeforeRefresh << ','
                << epoch.levelAfterRefresh;
-        WriteOptimizerColumns(output, optimizer);
+        WriteTrainingColumns(output, optimizer, sigmoid);
     }
 }
 
@@ -220,8 +238,10 @@ int main(int argc, char* argv[]) {
         WriteCsvHeader(output);
 
         std::cout << "OpenFHE port of the TenSEAL encrypted logistic-regression lab\n"
-                  << "Fixed settings: shuffled 70/30 split, seed 4, degree-59 Chebyshev sigmoid, "
-                     "full-batch training\n"
+                  << "Fixed settings: shuffled 70/30 split, seed 4, full-batch training\n"
+                  << "Sigmoid: " << labml::SigmoidApproximationName(options.sigmoid)
+                  << (options.sigmoid == labml::SigmoidApproximation::Chebyshev
+                      ? " (degree 59 on [-16, 16])\n" : " (0.5 + 0.197*x - 0.004*x^3)\n")
                   << "Optimizer: " << labml::OptimizerName(options.optimizer.method)
                   << ", momentum: " << (options.optimizer.method == labml::Optimizer::NesterovAcceleratedGradient
                       ? options.optimizer.momentum : 0.0) << "\n"
@@ -238,7 +258,7 @@ int main(int argc, char* argv[]) {
                       << " test\n";
 
             const auto plaintext = labml::TrainPlaintext(
-                split.train, split.test, options.epochs, options.learningRate, options.optimizer);
+                split.train, split.test, options.epochs, options.learningRate, options.optimizer, options.sigmoid);
             WritePlaintextRows(output, datasetName, plaintext);
             const auto& plainFinal = plaintext.epochs.back();
             std::cout << "  plaintext final: accuracy " << plainFinal.accuracy << ", loss "
@@ -246,6 +266,7 @@ int main(int argc, char* argv[]) {
 
             const auto setupStart = Clock::now();
             labfhe::CkksConfiguration configuration;
+            configuration.sigmoid = options.sigmoid;
             configuration.rowWidth = static_cast<std::uint32_t>(
                 labfhe::PackedRowWidth(labml::FeatureCount(split.train)));
             const auto runtime = labfhe::CreateFheRuntime(configuration);
@@ -277,7 +298,7 @@ int main(int argc, char* argv[]) {
                     options.learningRate,
                     method,
                     options.optimizer);
-                WriteEncryptedRows(output, datasetName, method, options.optimizer, encrypted);
+                WriteEncryptedRows(output, datasetName, method, options.optimizer, options.sigmoid, encrypted);
                 output.flush();
                 const auto& finalEpoch = encrypted.epochs.back();
                 std::cout << std::setprecision(6) << "    final accuracy " << finalEpoch.accuracy << ", loss "

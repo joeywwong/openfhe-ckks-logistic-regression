@@ -50,7 +50,25 @@ void ValidateOptimizerConfiguration(const OptimizerConfiguration& configuration)
     }
 }
 
-double PolynomialSigmoid(double score) {
+std::string SigmoidApproximationName(SigmoidApproximation approximation) {
+    switch (approximation) {
+        case SigmoidApproximation::Chebyshev:
+            return "chebyshev";
+        case SigmoidApproximation::Cubic:
+            return "cubic";
+    }
+    throw std::invalid_argument("Unknown sigmoid approximation");
+}
+
+double PolynomialSigmoid(double score, SigmoidApproximation approximation) {
+    switch (approximation) {
+        case SigmoidApproximation::Cubic:
+            return 0.5 + 0.197 * score - 0.004 * score * score * score;
+        case SigmoidApproximation::Chebyshev:
+            break;
+        default:
+            throw std::invalid_argument("Unknown sigmoid approximation");
+    }
     const auto& coefficients = SigmoidChebyshevCoefficients();
     const double normalized = -1.0 + 2.0 *
         (score - kSigmoidApproximationLowerBound) /
@@ -122,8 +140,10 @@ PlaintextTrainingResult TrainPlaintext(
     const Dataset& test,
     std::size_t epochs,
     double learningRate,
-    const OptimizerConfiguration& optimizer) {
+    const OptimizerConfiguration& optimizer,
+    SigmoidApproximation sigmoid) {
     ValidateOptimizerConfiguration(optimizer);
+    SigmoidApproximationName(sigmoid);
     if (train.empty() || test.empty()) {
         throw std::invalid_argument("Training and test datasets must not be empty");
     }
@@ -138,6 +158,7 @@ PlaintextTrainingResult TrainPlaintext(
     PlainModel previousStep = model;
     PlaintextTrainingResult result;
     result.optimizer = optimizer;
+    result.sigmoid = sigmoid;
     result.epochs.reserve(epochs);
 
     for (std::size_t epoch = 0; epoch < epochs; ++epoch) {
@@ -145,7 +166,7 @@ PlaintextTrainingResult TrainPlaintext(
         std::vector<double> weightGradient(model.weights.size(), 0.0);
         double biasGradient = 0.0;
         for (const auto& sample : train) {
-            const double output = PolynomialSigmoid(LinearScore(model, sample));
+            const double output = PolynomialSigmoid(LinearScore(model, sample), sigmoid);
             const double error  = output - sample.label;
             for (std::size_t feature = 0; feature < model.weights.size(); ++feature) {
                 weightGradient[feature] += sample.features[feature] * error;

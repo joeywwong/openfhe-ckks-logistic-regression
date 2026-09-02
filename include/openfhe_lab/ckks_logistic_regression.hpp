@@ -28,10 +28,10 @@ struct CkksConfiguration {
     std::uint32_t rowWidth{16};
     std::uint32_t bootstrapSlots{16};
     std::vector<std::uint32_t> levelBudget{3, 3};
-    // The degree-59 EvalLogistic circuit is substantially deeper than the
-    // former cubic. Keep enough levels after sparse bootstrapping for one full
-    // packed gradient/update circuit before the next refresh.
-    std::uint32_t levelsAvailableAfterBootstrap{16};
+    // Zero selects the approximation's default: 16 for Chebyshev, 10 for cubic.
+    // A nonzero value explicitly overrides the post-bootstrap level reserve.
+    std::uint32_t levelsAvailableAfterBootstrap{0};
+    labml::SigmoidApproximation sigmoid{labml::SigmoidApproximation::Cubic};
 };
 
 struct FheRuntime {
@@ -47,6 +47,7 @@ struct FheRuntime {
     // still has at least as many towers as bootstrapping would return. A model
     // must be beyond this consumed level for refresh to be genuine.
     std::uint32_t bootstrapTriggerLevel{};
+    labml::SigmoidApproximation sigmoid{labml::SigmoidApproximation::Cubic};
 };
 
 struct EncryptedBlock {
@@ -96,6 +97,8 @@ EncryptedDataset EncryptDataset(
     const FheRuntime& runtime,
     const labml::Dataset& data);
 
+// The runtime selects the sigmoid circuit and depth; the plaintext reference
+// must have been trained with the same approximation and optimizer.
 EncryptedTrainingResult TrainEncrypted(
     const FheRuntime& runtime,
     const EncryptedDataset& encryptedTrain,

@@ -15,32 +15,54 @@ void Require(bool condition, const std::string& message) {
     }
 }
 
-void CheckEncrypted(const labml::Dataset& data, std::size_t count, bool checkNesterov) {
+void CheckEncrypted(
+    const labml::Dataset& data,
+    std::size_t count,
+    bool checkNesterov,
+    labml::SigmoidApproximation sigmoid) {
     // Only subsets of the user's two lab datasets, not replacement datasets.
     const auto split = labml::LabTrainTestSplit(data);
     const labml::Dataset train(split.train.begin(), split.train.begin() + count);
     labfhe::CkksConfiguration configuration;
+    configuration.sigmoid = sigmoid;
     configuration.rowWidth = static_cast<std::uint32_t>(
         labfhe::PackedRowWidth(labml::FeatureCount(train)));
     const auto runtime = labfhe::CreateFheRuntime(configuration);
+    Require(runtime.sigmoid == sigmoid && runtime.multiplicativeDepth ==
+                (sigmoid == labml::SigmoidApproximation::Chebyshev ? 35U : 29U),
+            "Runtime must select the sigmoid circuit and its default CKKS depth");
     const auto encrypted = labfhe::EncryptDataset(runtime, train);
     const auto capacity = runtime.slots / runtime.rowWidth;
     Require(encrypted.blocks.size() == (count + capacity - 1) / capacity,
             "Unexpected encrypted block count");
-    // Degree-59 EvalLogistic makes each encrypted epoch much more expensive
-    // than the former cubic. Keep both refresh modes for GD on both packing
-    // shapes, plus one high-momentum real-bootstrap case to preserve encrypted
-    // NAG state/continuation coverage. Plaintext tests cover the full NAG matrix.
+    // Cover both refresh modes and packing shapes for each approximation,
+    // plus high-momentum NAG with real refresh. Plaintext tests cover the
+    // full NAG matrix.
     std::vector<labml::OptimizerConfiguration> optimizers{
         labml::OptimizerConfiguration{}};
     if (checkNesterov) {
         optimizers.push_back(
             {labml::Optimizer::NesterovAcceleratedGradient, 0.8});
     }
-    constexpr std::size_t epochs = 3;
+    // Cubic GD first bootstraps in epoch 3; Chebyshev in epoch 2. In both
+    // cases include a further epoch to exercise the refreshed model.
+    const std::size_t epochs = sigmoid == labml::SigmoidApproximation::Chebyshev ? 3 : 4;
     for (const auto optimizer : optimizers) {
-        const auto reference = labml::TrainPlaintext(train, split.test, epochs, 0.01, optimizer);
-        std::cout << "  optimizer " << labml::OptimizerName(optimizer.method)
+        const auto reference = labml::TrainPlaintext(train, split.test, epochs, 0.01, optimizer, sigmoid);
+        auto mismatched = reference;
+        mismatched.sigmoid = sigmoid == labml::SigmoidApproximation::Chebyshev
+            ? labml::SigmoidApproximation::Cubic : labml::SigmoidApproximation::Chebyshev;
+        bool rejected = false;
+        try {
+            labfhe::TrainEncrypted(runtime, encrypted, train, split.test, mismatched,
+                                  epochs, 0.01, labfhe::RefreshMethod::RealBootstrapping, optimizer);
+        }
+        catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        Require(rejected, "Encrypted trainer must reject a reference using a different sigmoid");
+        std::cout << "  sigmoid " << labml::SigmoidApproximationName(sigmoid)
+                  << ", optimizer " << labml::OptimizerName(optimizer.method)
                   << ", momentum " << optimizer.momentum << '\n';
         for (const auto method : {labfhe::RefreshMethod::SimulatedBootstrapping,
                                   labfhe::RefreshMethod::RealBootstrapping}) {
@@ -74,9 +96,9 @@ void CheckEncrypted(const labml::Dataset& data, std::size_t count, bool checkNes
             }
             Require(refreshes > 0, "Encrypted integration test never exercised refresh");
             if (method == labfhe::RefreshMethod::RealBootstrapping) {
-                Require(result.epochs[1].refreshed,
-                        "Degree-59 packed circuit should bootstrap by epoch 2");
-                Require(result.epochs[2].refreshed,
+                Require(result.epochs[epochs - 2].refreshed,
+                        "Packed circuit must bootstrap before the last test epoch");
+                Require(result.epochs.back().refreshed,
                         "Encrypted training must continue after the first real bootstrap");
             }
         }
@@ -87,11 +109,15 @@ void CheckEncrypted(const labml::Dataset& data, std::size_t count, bool checkNes
 
 int main(int argc, char* argv[]) {
     try {
-        Require(argc == 3, "Expected the two lab dataset paths");
-        CheckEncrypted(labml::LoadLogRegSample(argv[1]), 13, true);
+        Require(argc == 4, "Expected the two lab dataset paths and sigmoid approximation");
+        const std::string selection = argv[3];
+        Require(selection == "chebyshev" || selection == "cubic", "Unknown test sigmoid");
+        const auto sigmoid = selection == "chebyshev"
+            ? labml::SigmoidApproximation::Chebyshev : labml::SigmoidApproximation::Cubic;
+        CheckEncrypted(labml::LoadLogRegSample(argv[1]), 13, true, sigmoid);
         // 128 rows fit in a 9-feature block; 129 exercises cross-block sums
         // and a heavily padded final block, especially its bias gradient.
-        CheckEncrypted(labml::LoadAndPrepareFramingham(argv[2]), 129, false);
+        CheckEncrypted(labml::LoadAndPrepareFramingham(argv[2]), 129, false, sigmoid);
         std::cout << "Encrypted GD/NAG packing, refresh, and post-bootstrap continuation tests passed\n";
         return 0;
     }

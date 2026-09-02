@@ -22,6 +22,13 @@ struct OptimizerConfiguration {
 std::string OptimizerName(Optimizer optimizer);
 void ValidateOptimizerConfiguration(const OptimizerConfiguration& configuration);
 
+enum class SigmoidApproximation {
+    Cubic,
+    Chebyshev,
+};
+
+std::string SigmoidApproximationName(SigmoidApproximation approximation);
+
 struct PlainModel {
     std::vector<double> weights;
     double bias{};
@@ -39,6 +46,7 @@ struct PlaintextTrainingResult {
     PlainModel finalModel;
     std::vector<PlaintextEpochMetrics> epochs;
     OptimizerConfiguration optimizer;
+    SigmoidApproximation sigmoid{SigmoidApproximation::Cubic};
 };
 
 // Match the official OpenFHE logistic-regression example: approximate the
@@ -47,10 +55,11 @@ inline constexpr double kSigmoidApproximationLowerBound{-16.0};
 inline constexpr double kSigmoidApproximationUpperBound{16.0};
 inline constexpr std::uint32_t kSigmoidApproximationDegree{59};
 
-// Plaintext evaluation of the same Chebyshev series used by OpenFHE's
-// EvalLogistic. This keeps the reference optimizer aligned with the encrypted
-// training circuit.
-double PolynomialSigmoid(double score);
+// Evaluate either the Chebyshev series used by OpenFHE's EvalLogistic or the
+// lab/main-branch cubic 0.5 + 0.197*x - 0.004*x^3, matching the encrypted circuit.
+double PolynomialSigmoid(
+    double score,
+    SigmoidApproximation approximation = SigmoidApproximation::Cubic);
 
 // The lab reported cross-entropy with the exact sigmoid after decrypting the
 // model; this function is therefore deliberately separate from the circuit.
@@ -65,7 +74,8 @@ PlaintextTrainingResult TrainPlaintext(
     const Dataset& test,
     std::size_t epochs,
     double learningRate,
-    const OptimizerConfiguration& optimizer = {});
+    const OptimizerConfiguration& optimizer = {},
+    SigmoidApproximation sigmoid = SigmoidApproximation::Cubic);
 
 double MaximumModelError(const PlainModel& first, const PlainModel& second);
 

@@ -100,6 +100,14 @@ EncryptedModel BootstrapModel(const FheRuntime& runtime, const EncryptedModel& m
 lbcrypto::Ciphertext<lbcrypto::DCRTPoly> EvaluatePolynomialSigmoid(
     const FheRuntime& runtime,
     const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& score) {
+    if (runtime.sigmoid == labml::SigmoidApproximation::Cubic) {
+        // Preserve the lab/main-branch polynomial and its evaluation circuit.
+        const auto squared = runtime.context->EvalMult(score, score);
+        const auto cubed   = runtime.context->EvalMult(squared, score);
+        const auto linear  = runtime.context->EvalMult(score, 0.197);
+        const auto cubic   = runtime.context->EvalMult(cubed, -0.004);
+        return runtime.context->EvalAdd(runtime.context->EvalAdd(linear, cubic), 0.5);
+    }
     return runtime.context->EvalLogistic(
         score,
         labml::kSigmoidApproximationLowerBound,
@@ -175,6 +183,7 @@ std::string RefreshMethodName(RefreshMethod method) {
 }
 
 FheRuntime CreateFheRuntime(const CkksConfiguration& configuration) {
+    labml::SigmoidApproximationName(configuration.sigmoid);
     if (configuration.slots != 2048) {
         throw std::invalid_argument("Matrix reductions require all 2048 slots in the 4096-degree demo ring");
     }
@@ -204,8 +213,11 @@ FheRuntime CreateFheRuntime(const CkksConfiguration& configuration) {
 
     const std::uint32_t bootstrapDepth = lbcrypto::FHECKKSRNS::GetBootstrapDepth(
         configuration.levelBudget, secretKeyDistribution);
+    const std::uint32_t levelsAvailableAfterBootstrap = configuration.levelsAvailableAfterBootstrap != 0
+        ? configuration.levelsAvailableAfterBootstrap
+        : (configuration.sigmoid == labml::SigmoidApproximation::Chebyshev ? 16U : 10U);
     const std::uint32_t multiplicativeDepth =
-        bootstrapDepth + configuration.levelsAvailableAfterBootstrap;
+        bootstrapDepth + levelsAvailableAfterBootstrap;
     parameters.SetMultiplicativeDepth(multiplicativeDepth);
 
     auto context = lbcrypto::GenCryptoContext(parameters);
@@ -228,10 +240,10 @@ FheRuntime CreateFheRuntime(const CkksConfiguration& configuration) {
     auto sumColsKeys = context->EvalSumColsKeyGen(keyPair.secretKey);
     context->EvalBootstrapKeyGen(keyPair.secretKey, configuration.bootstrapSlots);
     const std::uint32_t bootstrapTriggerLevel =
-        multiplicativeDepth - configuration.levelsAvailableAfterBootstrap;
+        multiplicativeDepth - levelsAvailableAfterBootstrap;
     return {context, keyPair, multiplicativeDepth, configuration.slots,
             configuration.rowWidth, configuration.bootstrapSlots,
-            sumRowsKeys, sumColsKeys, bootstrapTriggerLevel};
+            sumRowsKeys, sumColsKeys, bootstrapTriggerLevel, configuration.sigmoid};
 }
 
 EncryptedDataset EncryptDataset(const FheRuntime& runtime, const labml::Dataset& data) {
@@ -270,6 +282,10 @@ EncryptedTrainingResult TrainEncrypted(
     RefreshMethod refreshMethod,
     const labml::OptimizerConfiguration& optimizer) {
     labml::ValidateOptimizerConfiguration(optimizer);
+    labml::SigmoidApproximationName(runtime.sigmoid);
+    if (plaintextReference.sigmoid != runtime.sigmoid) {
+        throw std::invalid_argument("Plaintext reference must use the same sigmoid approximation");
+    }
     RefreshMethodName(refreshMethod);
     if (!std::isfinite(learningRate) || learningRate <= 0.0 || test.empty()) {
         throw std::invalid_argument("Learning rate must be positive and finite; test data must not be empty");

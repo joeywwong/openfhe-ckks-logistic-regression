@@ -22,8 +22,9 @@ Only `LogReg_sample_dataset.csv` and `framingham.csv` are used.
 
 Training samples now use **row-major CKKS SIMD packing**, adapted from the
 [official OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples).
-The encrypted forward pass now also follows that example's degree-59
-Chebyshev approximation of the logistic function over `[-16, 16]`.
+The forward pass supports that example's degree-59 Chebyshev approximation
+of the logistic function over `[-16, 16]`, or the original lab/main-branch
+cubic `0.5 + 0.197*x - 0.004*x^3`. The lab cubic is the default.
 Full-batch Nesterov accelerated gradient (NAG), adapted from the same example,
 is optional; ordinary gradient descent (GD) remains the default.
 
@@ -32,7 +33,7 @@ is optional; ordinary gradient descent (GD) remains the default.
 - 70% training and 30% test data after a seed-4 shuffle;
 - zero-initialized binary logistic regression;
 - full-batch gradient descent, 100 epochs, learning rate 0.01;
-- degree-59 Chebyshev sigmoid over `[-16, 16]` in plaintext and ciphertext training;
+- original lab cubic sigmoid `0.5 + 0.197*x - 0.004*x^3` in plaintext and ciphertext training;
 - encrypted features and labels, now batched into row-major ciphertext blocks;
 - separate encrypted weight and bias ciphertexts;
 - per-epoch test accuracy and exact-sigmoid training loss after model decryption;
@@ -41,6 +42,28 @@ is optional; ordinary gradient descent (GD) remains the default.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the one-to-one mapping and timing
 definitions.
+
+## Sigmoid approximation
+
+Select the training approximation with `--sigmoid chebyshev|cubic`:
+
+| Choice | Training sigmoid | Levels reserved after bootstrap | Total multiplicative depth |
+|---|---|---:|---:|
+| `cubic` (default) | Original lab/main polynomial `0.5 + 0.197*x - 0.004*x^3` | 10 | 29 |
+| `chebyshev` | Degree-59 Chebyshev series on `[-16, 16]` | 16 | 35 |
+
+The selection applies to both plaintext and encrypted training, with either
+GD or NAG and either refresh method. The cubic option restores the original
+polynomial and encrypted evaluation circuit; it is not a degree-3 Chebyshev
+fit. Neither approximation is clamped. Reported loss always uses the exact
+sigmoid, and accuracy always classifies at linear score zero.
+
+```bash
+./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --sigmoid chebyshev
+./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --sigmoid cubic
+# Both lab datasets, using the comparison script:
+SIGMOID=cubic EPOCHS=4 ./scripts/run_comparison_wsl.sh
+```
 
 ## Nesterov accelerated gradient
 
@@ -68,7 +91,7 @@ and bias follow:
 - $\phi_t$: previous unaccelerated gradient-step model.
 - $\eta$: learning rate.
 - $\mu$: configured momentum coefficient.
-- $g(\theta_t)$: full-batch gradient using the Chebyshev sigmoid approximation.
+- $g(\theta_t)$: full-batch gradient using the selected sigmoid approximation.
 
 The first epoch omits extrapolation because $\beta_0=0$.
 
@@ -102,8 +125,8 @@ the bias gradient.
 
 The existing ring dimension remains 4,096. Data use all 2,048 slots; the
 repeated model still uses 16-slot sparse bootstrapping, with weights and bias
-refreshed separately. The deeper Chebyshev circuit uses multiplicative depth
-35. See [the design](docs/DESIGN.md#packed-ciphertext-layout) and the
+refreshed separately. Multiplicative depth is selected with the sigmoid:
+35 for Chebyshev, or 29 for the lab cubic. See [the design](docs/DESIGN.md#packed-ciphertext-layout) and the
 [historical cubic packed results](docs/PACKED_RESULTS.md).
 
 ## Build and test
@@ -125,7 +148,8 @@ cd openfhe-ckks-logistic-regression
 Tests include plaintext checks, packing/padding checks, and encrypted tests on
 subsets of the two lab datasets, including training after a real bootstrap.
 The tests also check NAG against an independent velocity formulation, zero
-momentum against GD, and encrypted NAG after real bootstrapping.
+momentum against GD, and encrypted NAG after real bootstrapping, for both
+sigmoid approximations. They also reject mismatched plaintext references.
 No CMake presets are needed. The workflow was verified with CMake 3.22.1;
 the CMake 3.5.1 compatibility branch has not been executed locally.
 
@@ -139,11 +163,14 @@ four-epoch verification run covering both refresh methods:
 EPOCHS=4 ./scripts/run_comparison_wsl.sh
 ```
 
-With the degree-59 circuit, a GD epoch consumes 10 levels and a nonzero-momentum
-NAG epoch consumes 11 in the integration configuration. The first genuine real
-bootstrap therefore occurs in epoch 2, followed by another after each
-subsequent epoch. Refresh is still triggered by consumed levels, not by a fixed
-epoch number.
+In the integration tests, the degree-59 circuit first bootstraps in epoch 2;
+the cubic circuit first bootstraps in epoch 3. Both then bootstrap after each
+subsequent epoch. From a fresh encryption, GD reaches consumed level 10 with
+Chebyshev or 6 with cubic. Further real-mode epochs consume 11 or 7 levels,
+respectively; nonzero NAG momentum adds one level after the first epoch.
+Refresh is triggered by actual consumed levels, not a fixed epoch number.
+Tests run through epoch 3 for Chebyshev and epoch 4 for cubic to verify training
+after the first real bootstrap.
 
 To run the lab's full 100 epochs (not represented as measured by the four-epoch report):
 
@@ -175,14 +202,17 @@ Options:
 --learning-rate X
 --optimizer gd|nag
 --momentum X
+--sigmoid chebyshev|cubic
 --output PATH
 ```
 
-New measurements go to `results/benchmark_packed.csv` for GD or
-`results/benchmark_nag.csv` for NAG. `OUTPUT_PATH` overrides that path when using
-the script. CSV rows include `optimizer` and the effective `momentum` (zero for
-GD). Existing result reports describe GD, not NAG. The earlier
-`results/benchmark.csv` is left intact. See
+New measurements go to `results/benchmark_packed_<sigmoid>.csv` for GD or
+`results/benchmark_nag_<sigmoid>.csv` for NAG, where `<sigmoid>` is `chebyshev`
+or `cubic`. This keeps the two approximations in separate files by default.
+Use `--output` with the executable or `OUTPUT_PATH` with the script to override
+the path. The script also accepts `SIGMOID` (default: `cubic`). CSV rows
+include `optimizer`, the effective `momentum` (zero for GD), and `sigmoid`.
+Existing result files and reports are historical measurements. See
 [`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) for the earlier packed
 cubic-sigmoid GD run;
 [`docs/RESULTS.md`](docs/RESULTS.md) is the historical unpacked report.

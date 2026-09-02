@@ -96,6 +96,10 @@ if(BUILD_TESTING)
     target_link_libraries(encrypted_packing_tests PRIVATE lab_fhe)
     add_test(NAME encrypted_packing_tests COMMAND encrypted_packing_tests
         ${CMAKE_CURRENT_SOURCE_DIR}/data/LogReg_sample_dataset.csv
-        ${CMAKE_CURRENT_SOURCE_DIR}/data/framingham.csv)
-    set_tests_properties(encrypted_packing_tests PROPERTIES LABELS "encrypted;integration" TIMEOUT 300)
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/framingham.csv chebyshev)
+    add_test(NAME encrypted_packing_cubic_tests COMMAND encrypted_packing_tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/LogReg_sample_dataset.csv
+        ${CMAKE_CURRENT_SOURCE_DIR}/data/framingham.csv cubic)
+    set_tests_properties(encrypted_packing_tests encrypted_packing_cubic_tests
+        PROPERTIES LABELS "encrypted;integration" TIMEOUT 300)
 endif()

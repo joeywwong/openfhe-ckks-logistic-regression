@@ -7,6 +7,8 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -40,23 +42,38 @@ void CheckChebyshevSigmoid() {
             (labml::kSigmoidApproximationUpperBound -
              labml::kSigmoidApproximationLowerBound) *
                 static_cast<double>(index) / 3200.0;
-        const double approximate = labml::PolynomialSigmoid(score);
+        const double approximate = labml::PolynomialSigmoid(score, labml::SigmoidApproximation::Chebyshev);
         maximumError = std::max(
             maximumError, std::abs(approximate - labml::ExactSigmoid(score)));
         Require(std::abs(
-                    approximate + labml::PolynomialSigmoid(-score) - 1.0) < 1e-12,
+                    approximate + labml::PolynomialSigmoid(-score, labml::SigmoidApproximation::Chebyshev) - 1.0) < 1e-12,
                 "Chebyshev sigmoid must preserve logistic symmetry");
     }
     Require(maximumError < 6e-6,
             "Degree-59 Chebyshev sigmoid exceeded its expected error on [-16, 16]");
 }
 
-void CheckNesterovUpdates(const labml::Dataset& data) {
+void CheckCubicSigmoid() {
+    // Fixed values from the original lab polynomial, including values outside
+    // [0, 1]: the training approximation must not be clamped.
+    for (const auto& point : std::vector<std::pair<double, double>>{
+             {0.0, 0.5}, {1.0, 0.693}, {-1.0, 0.307}, {2.0, 0.862},
+             {-2.0, 0.138}, {4.0, 1.032}, {-4.0, -0.032}, {10.0, -1.53}}) {
+        Require(std::abs(labml::PolynomialSigmoid(point.first, labml::SigmoidApproximation::Cubic) -
+                         point.second) < 1e-12,
+                "Cubic sigmoid must reproduce the original lab polynomial");
+    }
+    RequireInvalid([] {
+        labml::PolynomialSigmoid(0.0, static_cast<labml::SigmoidApproximation>(-1));
+    });
+}
+
+void CheckNesterovUpdates(const labml::Dataset& data, labml::SigmoidApproximation sigmoid) {
     constexpr std::size_t epochs = 5;
     constexpr double learningRate = 0.01;
-    const auto gd = labml::TrainPlaintext(data, data, epochs, learningRate);
+    const auto gd = labml::TrainPlaintext(data, data, epochs, learningRate, {}, sigmoid);
     const labml::OptimizerConfiguration zeroMomentum{labml::Optimizer::NesterovAcceleratedGradient, 0.0};
-    const auto zero = labml::TrainPlaintext(data, data, epochs, learningRate, zeroMomentum);
+    const auto zero = labml::TrainPlaintext(data, data, epochs, learningRate, zeroMomentum, sigmoid);
     for (std::size_t epoch = 0; epoch < epochs; ++epoch) {
         Require(labml::MaximumModelError(gd.epochs[epoch].model, zero.epochs[epoch].model) == 0.0,
                 "Zero-momentum NAG must reduce exactly to GD");
@@ -64,7 +81,7 @@ void CheckNesterovUpdates(const labml::Dataset& data) {
 
     for (const double momentum : {0.1, 0.8}) {
         const labml::OptimizerConfiguration optimizer{labml::Optimizer::NesterovAcceleratedGradient, momentum};
-        const auto nag = labml::TrainPlaintext(data, data, epochs, learningRate, optimizer);
+        const auto nag = labml::TrainPlaintext(data, data, epochs, learningRate, optimizer, sigmoid);
         Require(nag.epochs.size() == epochs, "NAG must report every epoch");
         Require(labml::MaximumModelError(nag.epochs.front().model, gd.epochs.front().model) == 0.0,
                 "Upstream NAG starts with one ordinary gradient step");
@@ -82,7 +99,7 @@ void CheckNesterovUpdates(const labml::Dataset& data) {
             lookAhead.bias += momentum * velocity.bias;
             labml::PlainModel gradient{std::vector<double>(base.weights.size(), 0.0), 0.0};
             for (const auto& sample : data) {
-                const double error = labml::PolynomialSigmoid(labml::LinearScore(lookAhead, sample)) - sample.label;
+                const double error = labml::PolynomialSigmoid(labml::LinearScore(lookAhead, sample), sigmoid) - sample.label;
                 for (std::size_t feature = 0; feature < base.weights.size(); ++feature) {
                     gradient.weights[feature] += sample.features[feature] * error / data.size();
                 }
@@ -132,8 +149,9 @@ int main(int argc, char* argv[]) {
     try {
         Require(argc == 3, "Expected LogReg and Framingham CSV paths");
         CheckChebyshevSigmoid();
+        CheckCubicSigmoid();
         Require(std::abs(labml::PolynomialSigmoid(0.0) - 0.5) < 1e-12,
-                "Chebyshev sigmoid must map zero to 0.5");
+                "Default cubic sigmoid must map zero to 0.5");
         Require(std::abs(labml::ExactSigmoid(0.0) - 0.5) < 1e-12,
                 "Exact sigmoid must map zero to 0.5");
 
@@ -158,8 +176,29 @@ int main(int argc, char* argv[]) {
         Require(trained.epochs.back().accuracy >= 0.95,
                 "Linearly separable LogReg sample should classify accurately");
 
-        CheckNesterovUpdates(labml::Dataset(logregSplit.train.begin(), logregSplit.train.begin() + 13));
-        CheckNesterovUpdates(labml::Dataset(framinghamSplit.train.begin(), framinghamSplit.train.begin() + 129));
+        const auto cubic = labml::TrainPlaintext(
+            logregSplit.train, logregSplit.test, 2, 0.01, {}, labml::SigmoidApproximation::Cubic);
+        const auto chebyshev = labml::TrainPlaintext(
+            logregSplit.train, logregSplit.test, 2, 0.01, {}, labml::SigmoidApproximation::Chebyshev);
+        Require(trained.sigmoid == labml::SigmoidApproximation::Cubic &&
+                    cubic.sigmoid == labml::SigmoidApproximation::Cubic &&
+                    chebyshev.sigmoid == labml::SigmoidApproximation::Chebyshev,
+                "Plaintext reference must record its sigmoid approximation, defaulting to cubic");
+        Require(labml::MaximumModelError(trained.finalModel, cubic.finalModel) == 0.0,
+                "Default training must match explicit cubic training");
+        Require(labml::MaximumModelError(trained.finalModel, chebyshev.finalModel) > 1e-8,
+                "Sigmoid selection must change the training trajectory");
+        RequireInvalid([&] {
+            labml::TrainPlaintext(logregSplit.train, logregSplit.test, 2, 0.01, {},
+                                 static_cast<labml::SigmoidApproximation>(-1));
+        });
+        for (const auto sigmoid : {labml::SigmoidApproximation::Chebyshev,
+                                   labml::SigmoidApproximation::Cubic}) {
+            CheckNesterovUpdates(
+                labml::Dataset(logregSplit.train.begin(), logregSplit.train.begin() + 13), sigmoid);
+            CheckNesterovUpdates(
+                labml::Dataset(framinghamSplit.train.begin(), framinghamSplit.train.begin() + 129), sigmoid);
+        }
 
         std::cout << "All plaintext and Nesterov tests passed\n";
         return 0;
