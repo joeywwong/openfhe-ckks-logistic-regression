@@ -11,4 +11,4 @@
 - [ ] Try different sigmoid approximations.
 - [ ] Dockerize the project for reproducible builds and execution.
 - [x] merge feature/compare-GD-NAG
-- [ ] merge feature/approximate-sigmoid
+- [x] merge feature/approximate-sigmoid. Users can choose between sigmoid approximations (cubic polynomial used in the lab, or chebyshev approximation used by OpenFHE logistic regression example repo)
