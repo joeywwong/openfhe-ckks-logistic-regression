@@ -78,6 +78,20 @@ target_compile_definitions(
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(PythonInterp 3 QUIET)
+    if(PYTHONINTERP_FOUND)
+        add_test(
+            NAME gd_nag_summary_tests
+            COMMAND ${PYTHON_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                -p test_summarize_gd_nag.py
+        )
+        set_tests_properties(
+            gd_nag_summary_tests
+            PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+    endif()
+
     add_executable(plaintext_tests tests/plaintext_tests.cpp)
     target_link_libraries(plaintext_tests PRIVATE lab_ml)
     add_test(

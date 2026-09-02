@@ -6,6 +6,10 @@
 /tmp/
 /output/
 
+# Python caches
+__pycache__/
+*.py[cod]
+
 # Compiler output
 *.o
 *.obj

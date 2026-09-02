@@ -65,7 +65,7 @@ sigmoid, and accuracy always classifies at linear score zero.
 SIGMOID=cubic EPOCHS=4 ./scripts/run_comparison_wsl.sh
 ```
 
-## Nesterov accelerated gradient
+## Nesterov accelerated gradient (NAG)
 
 NAG evaluates the gradient at a **look-ahead model**, extrapolated using recent
 parameter changes, so the gradient can correct the momentum direction. 
@@ -96,19 +96,27 @@ and bias follow:
 The first epoch omits extrapolation because $\beta_0=0$.
 
 Select `--optimizer nag`; `--momentum` defaults to `0.1`, must be finite in
-`[0, 1)`, and `0` reduces to GD. The sigmoid approximation, full-batch
-averaging, and learning rate are identical between optimizers. In a 100-epoch
-experiment, NAG showed faster
-loss reduction than gradient descent under the tested configuration. 
-Faster convergence is not guaranteed for this fixed-momentum, 
-approximate-gradient implementation.
+`[0, 1)`, and `0` reduces to GD. The cubic sigmoid, full-batch averaging, and
+learning rate are unchanged.
 
-With nonzero momentum, encrypted training retains four ciphertexts (weights
-and bias for both model states $\theta_t$ and $\phi_t$), preserving both states through simulated or real
-bootstrapping. The extra arithmetic and refresh work can outweigh any reduction
-in epochs. Larger momentum can also push scores outside the Chebyshev
-approximation interval `[-16, 16]`, where approximation guarantees no longer
-apply.
+#### Convergence and encrypted-computation trade-offs
+Compared with gradient descent (GD), nonzero-momentum NAG is intended to accelerate convergence and it may reach a target loss in fewer epochs (although acceleration is not guaranteed for this fixed-momentum implementation and the same learning rate as GD.). But in encrypted training, NAG has these tradeoffs:
+
+- **Encrypted arithmetic:** After the first epoch, it performs additional encrypted arithmetic: two
+  scalar multiplications, two additions, and two subtractions for weights and
+  bias.
+- **Model state:** It retains two encrypted model states, $\theta_t$ and $\phi_t$, each
+  comprising weights and bias, versus GD's single model state.
+- **Level consumption:** Its additional scalar multiplications may consume CKKS levels faster than GD
+  and may therefore trigger real bootstrapping earlier.
+- **Bootstrapping cost:** Under the current representation, refreshing both NAG states requires four
+  bootstraps—weights and bias for each state—versus GD's two. This overhead is
+  not inherent to NAG: the [official OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples#sparse-packing) packs both NAG states into one ciphertext and refreshes them with a single
+  bootstrap. See [advanced CKKS bootstrapping](https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/advanced-ckks-bootstrapping.cpp) for more information.
+
+In a 100-epoch experiment, NAG showed faster loss reduction than GD under the
+tested configuration. Larger momentum can also push scores outside the cubic
+sigmoid's useful range.
 
 ## Sample packing
 
@@ -154,6 +162,61 @@ No CMake presets are needed. The workflow was verified with CMake 3.22.1;
 the CMake 3.5.1 compatibility branch has not been executed locally.
 
 ## Run the comparison
+
+### Controlled gradient descent versus Nesterov accelerated gradient comparison
+
+Use the paired runner to compare convergence and runtime under identical data
+splits, initialization, learning rate, epoch count, datasets, and refresh
+methods. It preserves every raw per-epoch CSV and alternates whether GD or NAG
+runs first, reducing systematic warm-cache and first-run bias. With the default
+four repeats, each optimizer runs first twice, which gives a balanced result. For a short verification
+experiment:
+
+```bash
+REPEATS=4 EPOCHS=4 DATASET=all REFRESH=both \
+  ./scripts/run_gd_nag_comparison_wsl.sh
+```
+
+The defaults are `REPEATS=4`, `EPOCHS=100`, `MOMENTUM=0.1`,
+`LEARNING_RATE=0.01`, `DATASET=all`, and `REFRESH=both`. A full run includes
+real CKKS bootstrapping and can take a long time. `RESULT_DIR` selects an output
+directory; otherwise a timestamped directory is created under `results/`.
+Set `BUILD_AND_TEST=0` to reuse an existing successful build.
+
+Each result directory contains:
+
+- `raw/run_NNN_gd.csv` and `raw/run_NNN_nag.csv`: original per-epoch results;
+- `per_run_metrics.csv`: final/minimum loss, final accuracy, timing breakdown,
+  refresh count, CKKS levels, and encrypted/plaintext model error;
+- `per_run_comparison.csv`: fixed-epoch differences and the first NAG epoch/time
+  that reaches the matching GD run's final loss;
+- `aggregate_epoch_metrics.csv`: mean and sample standard deviation per epoch
+  for plotting loss/accuracy against epochs or cumulative training time;
+- `aggregate_optimizer_metrics.csv`: mean and sample standard deviation for
+  every optimizer metric;
+- `aggregate_comparison.csv`: mean GD/NAG differences, fixed-epoch runtime
+  ratio, target-loss success rate, epoch savings, and target-loss speedup.
+
+`experiment_config.csv` records the controlled inputs. Reported total time is
+the sum of encrypted arithmetic and optimizer-state refresh time; common
+context setup and data encryption are intentionally excluded. Metric decryption
+and the discarded paired-refresh measurement remain separate columns.
+
+In the comparison files, positive `nag_final_loss_improvement` means NAG has
+lower loss. Runtime ratios and speedups are `GD / NAG`, so values greater than
+one favor NAG. Test accuracy should be interpreted alongside loss because its
+discrete threshold can remain unchanged while optimization improves.
+
+Existing raw result pairs can be summarized again without rerunning OpenFHE:
+
+```bash
+python3 scripts/summarize_gd_nag.py \
+  --input-dir results/gd_nag_EXPERIMENT/raw \
+  --output-dir results/gd_nag_EXPERIMENT
+```
+
+See [`docs/GD_NAG_COMPARISON.md`](docs/GD_NAG_COMPARISON.md) for the controlled
+methodology and the checked-in two-repeat, four-epoch smoke measurement.
 
 The experiment retains the lab default of 100 epochs for both datasets and both
 refresh methods. Packing reduces the number of encrypted operations. For a

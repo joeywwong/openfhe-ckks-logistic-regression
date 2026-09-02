@@ -1,0 +1,9 @@
+dataset,method,epoch,homomorphic_seconds,refresh_seconds,metric_decryption_seconds,paired_simulated_refresh_seconds,seconds_per_epoch,accuracy,loss,max_plaintext_model_error,refreshed,level_before_refresh,level_after_refresh,optimizer,momentum
+LogReg_sample_dataset,plaintext,1,6.182e-06,0,0,0,6.182e-06,0.9966666667,0.6836835051,0,0,0,0,gd,0
+LogReg_sample_dataset,plaintext,2,5.25e-06,0,0,0,5.25e-06,0.9966666667,0.6744039811,0,0,0,0,gd,0
+LogReg_sample_dataset,plaintext,3,5.751e-06,0,0,0,5.751e-06,0.9966666667,0.6653052032,0,0,0,0,gd,0
+LogReg_sample_dataset,plaintext,4,5.41e-06,0,0,0,5.41e-06,0.9966666667,0.6563837929,0,0,0,0,gd,0
+LogReg_sample_dataset,simulated_bootstrapping,1,2.847899565,0.111269373,0,0.111269373,2.959168938,0.9966666667,0.6836835051,2.184954691e-14,1,6,0,gd,0
+LogReg_sample_dataset,simulated_bootstrapping,2,1.366686756,0.119572652,0,0.119572652,1.486259408,0.9966666667,0.6744039811,4.605370989e-14,1,6,0,gd,0
+LogReg_sample_dataset,simulated_bootstrapping,3,1.266214147,0.097853346,0,0.097853346,1.364067493,0.9966666667,0.6653052032,4.288041276e-14,1,6,0,gd,0
+LogReg_sample_dataset,simulated_bootstrapping,4,1.349787878,0.090931179,0,0.090931179,1.440719057,0.9966666667,0.6563837929,3.980821749e-14,1,6,0,gd,0
