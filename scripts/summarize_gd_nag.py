@@ -98,6 +98,18 @@ def _read_run_file(path, run, expected_optimizer):
         momentum = momenta.pop()
         if expected_optimizer == "gd" and momentum != 0.0:
             raise ValueError(f"{path}: GD rows must report effective momentum 0")
+        # Pre-state-packing benchmark files used the separate layout implicitly.
+        nag_packings = {
+            row.get("nag_packing", row.get("nag_state_packing", "separate")).strip().lower()
+            for row in rows
+        }
+        if len(nag_packings) != 1:
+            raise ValueError(f"{path}: {dataset}/{method} uses multiple NAG packing modes")
+        nag_packing = nag_packings.pop()
+        if nag_packing not in {"separate", "packed"}:
+            raise ValueError(f"{path}: unknown NAG packing {nag_packing!r}")
+        if expected_optimizer == "gd" and nag_packing != "separate":
+            raise ValueError(f"{path}: GD rows must report separate NAG packing")
 
         losses = [_number(row, "loss", path) for row in rows]
         accuracies = [_number(row, "accuracy", path) for row in rows]
@@ -109,6 +121,7 @@ def _read_run_file(path, run, expected_optimizer):
             "method": method,
             "optimizer": expected_optimizer,
             "momentum": momentum,
+            "nag_packing": nag_packing,
             "epochs": len(rows),
             "final_loss": losses[-1],
             "minimum_loss": minimum_loss,
@@ -168,6 +181,7 @@ def _build_comparisons(per_run):
             "dataset": dataset,
             "method": method,
             "momentum": nag["momentum"],
+            "nag_packing": nag["nag_packing"],
             "epochs": gd["epochs"],
             "gd_final_loss": target_loss,
             "nag_final_loss": nag["final_loss"],
@@ -213,12 +227,15 @@ def _aggregate(rows, key_names, metrics):
 def _aggregate_comparisons(comparisons):
     groups = defaultdict(list)
     for row in comparisons:
-        groups[(row["dataset"], row["method"], row["momentum"], row["epochs"])].append(row)
+        groups[(
+            row["dataset"], row["method"], row["momentum"],
+            row["nag_packing"], row["epochs"],
+        )].append(row)
     output = []
-    for (dataset, method, momentum, epochs), rows in sorted(groups.items()):
+    for (dataset, method, momentum, nag_packing, epochs), rows in sorted(groups.items()):
         summary = {
             "dataset": dataset, "method": method, "momentum": momentum,
-            "epochs": epochs, "runs": len(rows),
+            "nag_packing": nag_packing, "epochs": epochs, "runs": len(rows),
             "nag_target_success_rate": statistics.mean(
                 row["nag_reached_gd_final_loss"] for row in rows
             ),
@@ -251,7 +268,9 @@ def summarize_directory(input_directory, output_directory):
         per_run.extend(_read_run_file(path, int(match.group("run")), match.group("optimizer")))
     comparisons = _build_comparisons(per_run)
     optimizer_aggregates = _aggregate(
-        per_run, ["dataset", "method", "optimizer", "momentum", "epochs"], OPTIMIZER_METRICS
+        per_run,
+        ["dataset", "method", "optimizer", "momentum", "nag_packing", "epochs"],
+        OPTIMIZER_METRICS,
     )
     comparison_aggregates = _aggregate_comparisons(comparisons)
     epoch_rows = []
@@ -264,12 +283,13 @@ def summarize_directory(input_directory, output_directory):
             epoch_rows.append({
                 "run": row["run"], "dataset": row["dataset"], "method": row["method"],
                 "optimizer": row["optimizer"], "momentum": row["momentum"],
+                "nag_packing": row["nag_packing"],
                 "epoch": epoch, "loss": loss, "accuracy": accuracy,
                 "seconds_per_epoch": seconds, "cumulative_seconds": cumulative_seconds,
             })
     epoch_aggregates = _aggregate(
         epoch_rows,
-        ["dataset", "method", "optimizer", "momentum", "epoch"],
+        ["dataset", "method", "optimizer", "momentum", "nag_packing", "epoch"],
         ["loss", "accuracy", "seconds_per_epoch", "cumulative_seconds"],
     )
 
@@ -287,6 +307,7 @@ def summarize_directory(input_directory, output_directory):
         target_text = f"{target:.2f} epochs" if target != "" else "not reached"
         print(
             f"{row['dataset']}/{row['method']}: "
+            f"NAG packing {row['nag_packing']}; "
             f"loss GD {row['gd_final_loss_mean']:.6g}, NAG {row['nag_final_loss_mean']:.6g}; "
             f"time GD {row['gd_total_seconds_mean']:.3f}s, "
             f"NAG {row['nag_total_seconds_mean']:.3f}s; "

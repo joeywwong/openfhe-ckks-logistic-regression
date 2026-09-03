@@ -11,7 +11,7 @@ FIELDNAMES = [
     "metric_decryption_seconds", "paired_simulated_refresh_seconds",
     "seconds_per_epoch", "accuracy", "loss", "max_plaintext_model_error",
     "refreshed", "level_before_refresh", "level_after_refresh", "optimizer",
-    "momentum",
+    "momentum", "nag_packing",
 ]
 
 
@@ -32,6 +32,7 @@ class SummarizeGdNagTests(unittest.TestCase):
                     "refreshed": 1, "level_before_refresh": 10,
                     "level_after_refresh": 0, "optimizer": optimizer,
                     "momentum": 0.1 if optimizer == "nag" else 0,
+                    "nag_packing": "packed" if optimizer == "nag" else "separate",
                 })
         return path
 
@@ -50,6 +51,7 @@ class SummarizeGdNagTests(unittest.TestCase):
             ) as source:
                 comparison = next(csv.DictReader(source))
             self.assertAlmostEqual(float(comparison["nag_final_loss_improvement"]), 0.1)
+            self.assertEqual(comparison["nag_packing"], "packed")
             self.assertEqual(int(comparison["nag_epochs_to_gd_final_loss"]), 2)
             self.assertEqual(int(comparison["epoch_savings_at_gd_final_loss"]), 1)
             self.assertAlmostEqual(float(comparison["target_time_speedup_gd_over_nag"]), 1.25)

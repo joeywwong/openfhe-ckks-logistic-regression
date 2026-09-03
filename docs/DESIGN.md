@@ -40,8 +40,9 @@ The layout is adapted from OpenFHE's
 [`enc_matrix.h`](https://github.com/openfheorg/openfhe-logreg-training-examples/blob/b9f38f4e8e6fc93ef5d2a3a5d880f80e72d0484d/enc_matrix.h)
 (`MatrixVectorProductRow` and `MatrixVectorProductCol`).
 
-For `d` features, width `R` is the next power of two at least `d`. A 2,048-slot
-ciphertext holds `2048/R` sample rows. For two features and three samples:
+For the default separate model, width `R` is the next power of two at least
+`d`, where `d` is the feature count. A 2,048-slot ciphertext holds `2048/R`
+sample rows. For two features and three samples:
 
 ```text
 features: [x00,x01 | x10,x11 | x20,x21 | 0,0 | ...]
@@ -64,23 +65,35 @@ valid:    [1,  1   | 1,  1   | 1,  1   | 0,0 | ...]
 5. Sum gradients from **all blocks**, divide by the actual training count
    (not padded rows), and make one update with learning rate 0.01.
 
+Packed NAG instead chooses `R` as the next power of two at least `d + 1` and
+appends a public intercept coordinate:
+
+```text
+features: [x00,x01,1,0 | x10,x11,1,0 | x20,x21,1,0 | 0,0,0,0 | ...]
+model:    [w0, w1, b,0 | w0, w1, b,0 | w0, w1, b,0 | w0,w1,b,0 | ...]
+```
+
+The same matrix reductions then compute weight and bias gradients together.
+Padded rows have a zero intercept, so they make no bias-gradient contribution.
+
 This extends the upstream layout to multiple blocks without changing to
 mini-batch SGD. Optional Nesterov acceleration uses the same full-batch
 gradient. The upstream Chebyshev sigmoid is selectable alongside the lab
 cubic; pre-scaled data and the upstream dataset are not adopted. The upstream code is explicitly illustrative, not a
 performance benchmark; measurements here refer only to this local adaptation.
 
-LogReg uses width 2, 1,024 rows/block, one block and two input ciphertexts.
-Framingham uses width 16, 128 rows/block, seven blocks and 14 input ciphertexts.
-GD retains two separate encrypted model ciphertexts. NAG with nonzero
-momentum retains four, as described below.
+With separate storage, LogReg uses width 2, 1,024 rows/block, one block and two
+input ciphertexts. Packed NAG's intercept changes LogReg to width 4, 512
+rows/block, two blocks and four input ciphertexts. Framingham uses width 16,
+128 rows/block, seven blocks and 14 input ciphertexts in either mode. GD
+retains two separate encrypted model ciphertexts. Separate NAG with nonzero
+momentum retains four; packed NAG retains one, as described below.
 
-The model repeats with period `R`, which divides 16. Following the upstream
-sparse-bootstrap pattern, a clone's slot metadata is set to 16 for
-`EvalBootstrap` and back to 2,048 for matrix operations. This is valid only for
-the periodic model, not for arbitrary sample ciphertexts. Unlike the upstream
-combined theta/phi ciphertext, weights and bias are still refreshed separately
-for each optimizer state.
+The model repeats with period `R`. Following the upstream sparse-bootstrap
+pattern, a clone's slot metadata is reduced for `EvalBootstrap` and restored
+to 2,048 for matrix operations. Separate storage uses 16 sparse slots. Packed
+storage needs at least two rows, so the 16-wide model uses 32. This is valid
+only for the periodic model, not for arbitrary sample ciphertexts.
 
 Packing changes floating-point summation order, not the full-batch formula.
 Integration tests compare every encrypted epoch with the matching plaintext
@@ -111,19 +124,47 @@ unaccelerated step phi_next, then extrapolate theta_next from phi_next and the
 previous phi. Both weights and bias participate; the reported/final model is
 theta. See [the README](../README.md#nesterov-accelerated-gradient) for the formula.
 
-Nonzero momentum requires two separate models (four ciphertexts). Both states
-use the existing row-cloned layout and sparse bootstrap. Each worn ciphertext
-is bootstrapped only when its consumed level exceeds the trigger; a less-worn
-state can be retained without a no-op bootstrap. Simulated refresh re-encrypts
-both states each epoch. Neither refresh path resets momentum or replaces the
-previous phi with theta. Real-mode metric/paired-benchmark decryptions never
-feed the training state.
+The default `--nag-packing separate` representation retains two models,
+each with a weight and bias ciphertext (four ciphertexts total). Each worn
+ciphertext is bootstrapped only when its consumed level exceeds the trigger; a
+less-worn state can be retained without a no-op bootstrap.
 
-Momentum defaults to 0.1 and must be finite in [0, 1). Zero momentum takes the
-GD circuit without an extra encrypted state. GD remains the default so earlier
-lab measurements are reproducible. The CLI passes identical settings to both
-trainers; the encrypted API also rejects a reference from a different optimizer
-or momentum. CSV rows append `optimizer`, `momentum` (zero for GD), and `sigmoid`.
+`--nag-packing packed` adapts the upstream
+`collateOneDMats2CtVRC` technique. Theta occupies every even row block and phi
+every odd row block. Before an epoch, an alternating plaintext mask isolates
+one state and a rotation by one signed row width fills its missing blocks:
+
+```text
+packed:       [theta][phi][theta][phi]...
+theta mask:   [theta][  0][theta][  0]... + rotate(+rowWidth)
+phi mask:     [  0][phi][  0][phi]...     + rotate(-rowWidth)
+```
+
+After the update, complementary masks and one addition merge theta_next and
+phi_next again. As in the upstream example, packed mode appends bias to the
+model as an intercept coordinate. Each real sample row gets a public trailing
+one, while padded rows remain all zero. The combined row
+`[weights, bias, padding]` lets the forward pass and gradient update all
+parameters together. Both complete NAG states therefore remain in one
+ciphertext from one epoch to the next.
+
+Packed sparse bootstrapping must retain at least two row blocks. The CLI
+therefore raises the payload to 32 slots for a 16-wide model. It also reserves
+two extra post-bootstrap levels: 12 instead of 10 for cubic, or 18 instead of
+16 for Chebyshev. The default separate representation and its depths are
+unchanged.
+
+Simulated refresh re-encrypts the complete selected representation each epoch.
+Neither refresh path resets momentum or replaces the previous phi with theta.
+Real-mode metric/paired-benchmark decryptions never feed the training state.
+
+Momentum defaults to 0.1 and must be finite in [0, 1). Zero momentum produces
+the GD recurrence; separate mode can omit the unused previous state, while
+packed mode retains the selected one-ciphertext layout. GD remains the default
+so earlier lab measurements are reproducible. The CLI passes identical
+settings to both trainers; the encrypted API also rejects a reference from a
+different optimizer or momentum. CSV rows append `optimizer`, `momentum`
+(zero for GD), `sigmoid`, and `nag_packing`.
 
 ## Framingham preprocessing
 
@@ -146,10 +187,11 @@ keys, and learning rate.
 
 ### Simulated bootstrapping
 
-After an encrypted epoch, the client decrypts the updated model ciphertexts and
-immediately encrypts the recovered weights and bias again. NAG also refreshes
-the previous gradient-step model. `refresh_seconds` measures both decryption
-and re-encryption. This is the technique used by the
+After an encrypted epoch, the client decrypts the updated optimizer state and
+immediately encrypts it again in the selected representation. Separate NAG
+refreshes theta and the previous gradient-step model; packed NAG refreshes its
+single state ciphertext. `refresh_seconds` measures both decryption and
+re-encryption. This is the technique used by the
 TenSEAL lab to simulate a refreshed modulus/noise budget.
 
 ### Real bootstrapping
@@ -157,9 +199,9 @@ TenSEAL lab to simulate a refreshed modulus/noise budget.
 OpenFHE 1.1.2 returns the original ciphertext when it still has at least as many
 modulus towers as bootstrapping would produce. The real branch therefore waits
 through the initial natural epochs until the consumed level is greater than the
-post-bootstrap trigger. It then calls `EvalBootstrap` on each worn weight/bias
-ciphertext, including the NAG gradient-step state. No secret key is used for
-these refreshes. Once the model is at the shorter post-bootstrap chain, the
+post-bootstrap trigger. It then calls `EvalBootstrap` on each worn state
+ciphertext: two for GD, four for separate NAG, or one for packed NAG. No
+secret key is used for these refreshes. Once the model is at the shorter post-bootstrap chain, the
 next epoch consumes enough
 levels to make every subsequent bootstrap genuine.
 
@@ -174,10 +216,12 @@ performed solely to report the lab's per-epoch accuracy and loss; its time is
 ## Timing definitions
 
 - `homomorphic_seconds`: encrypted forward passes, gradient accumulation, and
-  model update, including NAG extrapolation when selected.
+  model update, including NAG extrapolation and packed state extraction/
+  repacking when selected.
 - `refresh_seconds`: decrypt+encrypt for simulated bootstrapping, or
   `EvalBootstrap` for real bootstrapping, across all retained optimizer state
-  (two ciphertexts for GD, four for NAG with nonzero momentum).
+  (two ciphertexts for GD, four for separate NAG with nonzero momentum, or one
+  for packed NAG).
 - `paired_simulated_refresh_seconds`: at a genuine real-bootstrap point, the
   cost of decrypting and re-encrypting a discarded copy of the same input,
   including both NAG states.
@@ -187,13 +231,14 @@ performed solely to report the lab's per-epoch accuracy and loss; its time is
   lab's epoch metrics.
 
 The CSV also reports maximum consumed OpenFHE levels across all optimizer
-ciphertexts before and after refresh and the maximum absolute coefficient
+ciphertexts before and after refresh, the selected `nag_packing`, and the maximum absolute coefficient
 error relative to the matching plaintext epoch.
 
 ## OpenFHE configuration
 
-For each dataset, the two refresh methods use one common context. It
-uses 2,048 data slots and 16 sparse model-bootstrap slots, `FLEXIBLEAUTO`,
+For each dataset, the two refresh methods use one common context. It uses 2,048
+data slots and at least 16 sparse model-bootstrap slots (32 for a 16-wide packed
+NAG model), `FLEXIBLEAUTO`,
 59-bit scaling moduli, a 60-bit first
 modulus, `HYBRID` key switching, level budget `{3,3}`, and ring dimension 4096.
 The degree-59 circuit reserves 16 levels after bootstrapping, for total

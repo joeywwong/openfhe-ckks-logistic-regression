@@ -21,17 +21,27 @@ enum class RefreshMethod {
 
 std::string RefreshMethodName(RefreshMethod method);
 
+enum class NagPacking {
+    Separate,
+    Packed,
+};
+
+std::string NagPackingName(NagPacking packing);
+
 struct CkksConfiguration {
     // Full data packing in the existing 4096-degree demo ring. The periodic
-    // weight/bias vectors still use the original 16-slot sparse bootstrap.
+    // weight/bias vectors use sparse bootstrapping; packed NAG needs at
+    // least two row widths in bootstrapSlots.
     std::uint32_t slots{2048};
     std::uint32_t rowWidth{16};
     std::uint32_t bootstrapSlots{16};
     std::vector<std::uint32_t> levelBudget{3, 3};
-    // Zero selects the approximation's default: 16 for Chebyshev, 10 for cubic.
+    // Zero selects 16 levels for Chebyshev or 10 for cubic, plus two levels
+    // when packed NAG extraction/repacking is configured.
     // A nonzero value explicitly overrides the post-bootstrap level reserve.
     std::uint32_t levelsAvailableAfterBootstrap{0};
     labml::SigmoidApproximation sigmoid{labml::SigmoidApproximation::Cubic};
+    NagPacking nagPacking{NagPacking::Separate};
 };
 
 struct FheRuntime {
@@ -43,11 +53,16 @@ struct FheRuntime {
     std::uint32_t bootstrapSlots{};
     std::shared_ptr<std::map<std::uint32_t, lbcrypto::EvalKey<lbcrypto::DCRTPoly>>> sumRowsKeys;
     std::shared_ptr<std::map<std::uint32_t, lbcrypto::EvalKey<lbcrypto::DCRTPoly>>> sumColsKeys;
+    // Alternating row-block masks used by the upstream-style NAG state layout.
+    // They are null when separate state ciphertexts are selected.
+    lbcrypto::Plaintext thetaStateMask;
+    lbcrypto::Plaintext phiStateMask;
     // EvalBootstrap in OpenFHE 1.1.2 returns the original ciphertext when it
     // still has at least as many towers as bootstrapping would return. A model
     // must be beyond this consumed level for refresh to be genuine.
     std::uint32_t bootstrapTriggerLevel{};
     labml::SigmoidApproximation sigmoid{labml::SigmoidApproximation::Cubic};
+    NagPacking nagPacking{NagPacking::Separate};
 };
 
 struct EncryptedBlock {
@@ -65,8 +80,7 @@ struct EncryptedDataset {
 };
 
 struct EncryptedModel {
-    // The lab encrypted weights and bias separately. This project deliberately
-    // keeps that layout. NAG retains two such models (theta and previous phi).
+    // The original lab/current approach keeps weights and bias separate.
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> weights;
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> bias;
 };
@@ -97,8 +111,8 @@ EncryptedDataset EncryptDataset(
     const FheRuntime& runtime,
     const labml::Dataset& data);
 
-// The runtime selects the sigmoid circuit and depth; the plaintext reference
-// must have been trained with the same approximation and optimizer.
+// The runtime selects the sigmoid circuit, depth, and NAG state layout; the
+// plaintext reference must use the same approximation and optimizer.
 EncryptedTrainingResult TrainEncrypted(
     const FheRuntime& runtime,
     const EncryptedDataset& encryptedTrain,

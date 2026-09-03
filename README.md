@@ -26,7 +26,9 @@ The forward pass supports that example's degree-59 Chebyshev approximation
 of the logistic function over `[-16, 16]`, or the original lab/main-branch
 cubic `0.5 + 0.197*x - 0.004*x^3`. The lab cubic is the default.
 Full-batch Nesterov accelerated gradient (NAG), adapted from the same example,
-is optional; ordinary gradient descent (GD) remains the default.
+is optional; ordinary gradient descent (GD) remains the default. NAG users can
+retain the existing separate state or put the complete theta/phi state in one
+ciphertext, as in the example.
 
 ## Default experiment behavior
 
@@ -47,10 +49,10 @@ definitions.
 
 Select the training approximation with `--sigmoid chebyshev|cubic`:
 
-| Choice | Training sigmoid | Levels reserved after bootstrap | Total multiplicative depth |
+| Choice | Training sigmoid | Post-bootstrap levels, separate / packed NAG | Total depth, separate / packed NAG |
 |---|---|---:|---:|
-| `cubic` (default) | Original lab/main polynomial `0.5 + 0.197*x - 0.004*x^3` | 10 | 29 |
-| `chebyshev` | Degree-59 Chebyshev series on `[-16, 16]` | 16 | 35 |
+| `cubic` (default) | Original lab/main polynomial `0.5 + 0.197*x - 0.004*x^3` | 10 / 12 | 29 / 31 |
+| `chebyshev` | Degree-59 Chebyshev series on `[-16, 16]` | 16 / 18 | 35 / 37 |
 
 The selection applies to both plaintext and encrypted training, with either
 GD or NAG and either refresh method. The cubic option restores the original
@@ -99,20 +101,39 @@ Select `--optimizer nag`; `--momentum` defaults to `0.1`, must be finite in
 `[0, 1)`, and `0` reduces to GD. The cubic sigmoid, full-batch averaging, and
 learning rate are unchanged.
 
+Select the encrypted optimizer storage with `--nag-packing separate|packed`:
+
+- `separate` (default) preserves the current representation: theta and phi
+  each have an encrypted weight vector and encrypted bias, for four periodic
+  ciphertexts.
+- `packed` uses the official example's technique. Bias becomes an intercept
+  coordinate, so each complete model row is `[weights, bias, padding]`. Even
+  rows hold theta and odd rows hold phi. Alternating masks and one
+  `+rowWidth` or `-rowWidth` rotation reconstruct each row-cloned state before
+  the gradient; masks merge the updated states again before refresh.
+
+The packed representation stores and bootstraps the entire NAG state in one
+ciphertext, matching the upstream design. It needs two model rows in the sparse
+bootstrap payload and reserves two additional post-bootstrap levels for
+extraction and repacking.
+
 #### Convergence and encrypted-computation trade-offs
 Compared with gradient descent (GD), nonzero-momentum NAG is intended to accelerate convergence and it may reach a target loss in fewer epochs (although acceleration is not guaranteed for this fixed-momentum implementation and the same learning rate as GD.). But in encrypted training, NAG has these tradeoffs:
 
-- **Encrypted arithmetic:** After the first epoch, it performs additional encrypted arithmetic: two
-  scalar multiplications, two additions, and two subtractions for weights and
-  bias.
+- **Encrypted arithmetic:** After the first epoch, the separate representation
+  performs the NAG update once for weights and once for bias. The packed
+  representation performs it once on the combined weight/intercept vector, but
+  also pays for state extraction and repacking.
 - **Model state:** It retains two encrypted model states, $\theta_t$ and $\phi_t$, each
   comprising weights and bias, versus GD's single model state.
 - **Level consumption:** Its additional scalar multiplications may consume CKKS levels faster than GD
   and may therefore trigger real bootstrapping earlier.
-- **Bootstrapping cost:** Under the current representation, refreshing both NAG states requires four
-  bootstraps—weights and bias for each state—versus GD's two. This overhead is
-  not inherent to NAG: the [official OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples#sparse-packing) packs both NAG states into one ciphertext and refreshes them with a single
-  bootstrap. See [advanced CKKS bootstrapping](https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/advanced-ckks-bootstrapping.cpp) for more information.
+- **Bootstrapping cost:** The default separate representation refreshes four
+  NAG ciphertexts. Packed mode refreshes one, like the
+  [official OpenFHE example](https://github.com/openfheorg/openfhe-logreg-training-examples#sparse-packing)
+  from which the technique is adapted. See
+  [advanced CKKS bootstrapping](https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/advanced-ckks-bootstrapping.cpp)
+  for more information.
 
 In a 100-epoch experiment, NAG showed faster loss reduction than GD under the
 tested configuration. Larger momentum can also push scores outside the cubic
@@ -123,18 +144,19 @@ sigmoid's useful range.
 Each ciphertext contains sample rows padded to a power-of-two feature width.
 Weights repeat across rows and labels repeat across columns. `EvalSumCols`
 computes row-wise scores and `EvalSumRows` aggregates gradients across samples.
-All blocks contribute to one full-batch update; padded rows are masked out of
-the bias gradient.
+All blocks contribute to one full-batch update. Separate mode masks padded rows
+out of the bias gradient; packed NAG uses a zero intercept in padded rows.
 
-| Dataset | Training rows | Row width | Rows/block | Blocks | Input ciphertexts, before -> after |
-|---|---:|---:|---:|---:|---:|
-| LogReg sample | 700 | 2 | 1,024 | 1 | 1,400 -> 2 |
-| Framingham | 780 | 16 | 128 | 7 | 1,560 -> 14 |
+| Dataset | Training rows | Separate row width / blocks / input CTs | Packed NAG row width / blocks / input CTs |
+|---|---:|---:|---:|
+| LogReg sample | 700 | 2 / 1 / 2 | 4 / 2 / 4 |
+| Framingham | 780 | 16 / 7 / 14 | 16 / 7 / 14 |
 
-The existing ring dimension remains 4,096. Data use all 2,048 slots; the
-repeated model still uses 16-slot sparse bootstrapping, with weights and bias
-refreshed separately. Multiplicative depth is selected with the sigmoid:
-35 for Chebyshev, or 29 for the lab cubic. See [the design](docs/DESIGN.md#packed-ciphertext-layout) and the
+The existing ring dimension remains 4,096. Data use all 2,048 slots. The
+separate layout keeps the 16-slot sparse bootstrap. Packed NAG uses at least
+two model rows (32 slots for the 16-wide Framingham model) and combines bias
+with weights as an intercept coordinate. Multiplicative depth is selected with
+the sigmoid and NAG storage as shown above. See [the design](docs/DESIGN.md#packed-ciphertext-layout) and the
 [historical cubic packed results](docs/PACKED_RESULTS.md).
 
 ## Build and test
@@ -252,8 +274,9 @@ For NAG with both refresh methods:
 
 ```bash
 ./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --optimizer nag --momentum 0.1
+./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --optimizer nag --momentum 0.1 --nag-packing packed
 # Both lab datasets, using the comparison script:
-OPTIMIZER=nag MOMENTUM=0.1 EPOCHS=4 ./scripts/run_comparison_wsl.sh
+OPTIMIZER=nag MOMENTUM=0.1 NAG_PACKING=packed EPOCHS=4 ./scripts/run_comparison_wsl.sh
 ```
 
 Options:
@@ -265,16 +288,19 @@ Options:
 --learning-rate X
 --optimizer gd|nag
 --momentum X
+--nag-packing separate|packed
 --sigmoid chebyshev|cubic
 --output PATH
 ```
 
 New measurements go to `results/benchmark_packed_<sigmoid>.csv` for GD or
-`results/benchmark_nag_<sigmoid>.csv` for NAG, where `<sigmoid>` is `chebyshev`
-or `cubic`. This keeps the two approximations in separate files by default.
+`results/benchmark_nag_<sigmoid>.csv` for separate NAG. Packed NAG uses
+`results/benchmark_nag_packed_<sigmoid>.csv`, where `<sigmoid>` is
+`chebyshev` or `cubic`.
 Use `--output` with the executable or `OUTPUT_PATH` with the script to override
-the path. The script also accepts `SIGMOID` (default: `cubic`). CSV rows
-include `optimizer`, the effective `momentum` (zero for GD), and `sigmoid`.
+the path. The script also accepts `SIGMOID` (default: `cubic`) and
+`NAG_PACKING` (default: `separate`). CSV rows include `optimizer`, the effective
+`momentum` (zero for GD), `sigmoid`, and `nag_packing`.
 Existing result files and reports are historical measurements. See
 [`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) for the earlier packed
 cubic-sigmoid GD run;
@@ -295,8 +321,10 @@ cubic-sigmoid GD run;
 - maximum consumed CKKS level across the complete optimizer state before and
   after refresh.
 
-NAG arithmetic and refresh timings include both optimizer states. The paired
-simulated-refresh measurement also refreshes a discarded copy of both states.
+NAG arithmetic and refresh timings include both optimizer states, including
+mask/rotation extraction and repacking in packed mode. The paired
+simulated-refresh measurement also refreshes a discarded copy of the complete
+selected state representation.
 
 ## Repository layout
 

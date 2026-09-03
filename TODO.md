@@ -6,6 +6,7 @@
 - [ ] Run repeated, controlled packed-vs-unpacked benchmarks; the four-epoch report compares new measurements with earlier runs, not a fresh controlled A/B experiment.
 - [x] Add optional Nesterov accelerated gradient to plaintext and encrypted training, including state refresh and tests.
 - [x] Add a repeatable, controlled GD-vs-NAG runner and aggregate convergence/runtime summaries.
+- [x] Add selectable upstream-style one-ciphertext NAG packing while retaining the separate approach.
 - [ ] Compare NAG and GD convergence and total runtime in repeated, controlled runs.
 - [ ] Collect and report full repeated 100-epoch GD-vs-NAG encrypted measurements.
 - [ ] Try different sigmoid approximations.
