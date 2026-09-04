@@ -1,6 +1,10 @@
-# OpenFHE CKKS Logistic Regression: Simulated and Real Bootstrapping
+# OpenFHE CKKS Logistic Regression Training: Packing and Bootstrapping
 
 > Tested with OpenFHE 1.1.2
+
+OpenFHE 1.1.2 is intentionally pinned to preserve comparability with the
+original lab environment. Migrating and revalidating the experiment on a
+current OpenFHE release is future work.
 
 This project is built from my template project
 [`openfhe-template`](https://github.com/joeywwong/openfhe-template) and ports the
@@ -29,6 +33,56 @@ Full-batch Nesterov accelerated gradient (NAG), adapted from the same example,
 is optional; ordinary gradient descent (GD) remains the default. NAG users can
 retain the existing separate state or put the complete theta/phi state in one
 ciphertext, as in the example.
+
+## Improvements over the original lab
+
+| Aspect | Original lab implementation | Current OpenFHE project |
+|---|---|---|
+| Implementation | Python/TenSEAL | C++17/OpenFHE |
+| Ciphertext bootstrapping/refresh | ❌: 'Simulated bootstrapping' - decrypt and re-encrypt with the secret key | ✅: Genuine non-interactive `EvalBootstrap` |
+| SIMD packing for training-data | ❌: One feature ciphertext and one label ciphertext per sample | ✅: Row-major SIMD blocks; Framingham input reduced from 1,560 to 14 ciphertexts |
+| Optimizer | Full-batch gradient descent | fixed-momentum Nesterov accelerated gradient |
+| Packing of model parameters, NAG state | ❌: One ciphertext per model parameter, NAG state | Four separate theta/phi weight/bias ciphertexts or one packed ciphertext |
+| Sigmoid approximation | Cubic approximation | Degree-59 Chebyshev approximation (more accurate, but additional multiplication depth) |
+
+## Project highlights
+
+- **End-to-end encrypted training:** the project evaluates full-batch
+  logistic-regression updates on CKKS ciphertexts and continues training after
+  genuine non-interactive `EvalBootstrap` refreshes.
+- **Genuine bootstrapping and an explicit confidentiality boundary:** compare
+  OpenFHE's non-interactive `EvalBootstrap`, which refreshes the encrypted model
+  state without decrypting it, with the lab's decrypt-and-re-encrypt workaround.
+  The workaround is faster, but it requires secret-key
+  access and exposes the plaintext model parameters to the secret-key holder.
+- **SIMD sample packing and substantially lower training time:** row-major
+  dataset packing, multiple ciphertext blocks, and padding masks reduce the
+  encrypted Framingham training input from 1,560 ciphertexts to 14, while
+  ensuring that all 780 training rows contribute exactly once. Encrypted training time decreased from approximately 230 seconds per epoch (without sample packing, the approach used my lab before) to approximately 8.5 seconds per epoch with sample packing, which is 27x faster (even faster with NAG state packing, approx. 4.5 seconds per epoch, 51x faster). 
+- **Improvements over the original lab:** compare the lab's original training configuration with the current improvements, e.g. packing of optimization states, a different optimization method, more precise approximation of the sigmoid function (but with additional multiplication depth), and measure their effects on runtime (per epoch, total runtime), number of epochs, ciphertexts, and bootstrapping, number of multiplications and consumed levels, numerical accuracy, and model quality:
+  1. gradient descent (GD) used in my lab before vs
+  fixed-momentum Nesterov accelerated gradient (NAG); 
+  2. model parameters and NAG states separated into two/four ciphertexts like in my lab before vs all packed into one ciphertext, reducing two/four bootstrapping to one; 
+  3. the cubic polynomial used in my lab for the approximation of the sigmoid function vs a degree-59 Chebyshev approximation of the sigmoid function.
+- **Plaintext-referenced validation:** integration tests compare every
+  encrypted epoch with an independent plaintext optimizer, exercise both
+  refresh methods and sigmoid circuits, and continue after a real bootstrap.
+
+The newest optimization packs the complete periodic NAG state—theta, phi,
+weights, and intercept—into one ciphertext instead of four. In preliminary
+single-run, 20-epoch measurements, it produced the following result:
+
+| Dataset | Separate NAG state | Packed NAG state | Observed total-time reduction | Observed speedup |
+|---|---:|---:|---:|---:|
+| Framingham | 231.281 s | 85.462 s | 63.0% | 2.71x |
+| LogReg sample | 137.176 s | 45.456 s | 66.9% | 3.02x |
+
+Both layouts reached the same final test accuracy; their final training losses
+differed by less than `9e-8`. These are local observations, not statistically
+established or production-secure performance claims. The runs were not
+repeated or order-balanced. See the
+[NAG state-packing report](docs/NAG_STATE_PACKING_RESULTS.md) for the timing
+breakdown, accuracy checks, trade-offs, raw-data links, and limitations.
 
 ## Default experiment behavior
 
@@ -118,7 +172,11 @@ bootstrap payload and reserves two additional post-bootstrap levels for
 extraction and repacking.
 
 #### Convergence and encrypted-computation trade-offs
-Compared with gradient descent (GD), nonzero-momentum NAG is intended to accelerate convergence and it may reach a target loss in fewer epochs (although acceleration is not guaranteed for this fixed-momentum implementation and the same learning rate as GD.). But in encrypted training, NAG has these tradeoffs:
+
+Compared with gradient descent (GD), nonzero-momentum NAG is intended to
+accelerate convergence and may reach a target loss in fewer epochs. Acceleration
+is not guaranteed for this fixed-momentum implementation at the same learning
+rate. In encrypted training, NAG also has these trade-offs:
 
 - **Encrypted arithmetic:** After the first epoch, the separate representation
   performs the NAG update once for weights and once for bias. The packed
@@ -135,9 +193,11 @@ Compared with gradient descent (GD), nonzero-momentum NAG is intended to acceler
   [advanced CKKS bootstrapping](https://github.com/openfheorg/openfhe-development/blob/main/src/pke/examples/advanced-ckks-bootstrapping.cpp)
   for more information.
 
-In a 100-epoch experiment, NAG showed faster loss reduction than GD under the
-tested configuration. Larger momentum can also push scores outside the cubic
-sigmoid's useful range.
+A historical single 100-epoch run ended with lower loss for NAG than GD under
+the tested configuration, but NAG also took longer and the runs were not a
+repeated controlled comparison. It is therefore evidence of the implementation's
+convergence behavior, not proof that NAG is faster overall. Larger momentum can
+also push scores outside the cubic sigmoid's useful range.
 
 ## Sample packing
 
@@ -179,7 +239,11 @@ Tests include plaintext checks, packing/padding checks, and encrypted tests on
 subsets of the two lab datasets, including training after a real bootstrap.
 The tests also check NAG against an independent velocity formulation, zero
 momentum against GD, and encrypted NAG after real bootstrapping, for both
-sigmoid approximations. They also reject mismatched plaintext references.
+sigmoid approximations. Packed NAG is exercised across the 129-row Framingham
+block boundary as well as on the LogReg layout. The tests use a logistic-loss
+sensitivity bound derived from the measured coefficient error, rather than an
+arbitrary fixed tolerance for randomized CKKS bootstrapping. They also reject
+mismatched plaintext references.
 No CMake presets are needed. The workflow was verified with CMake 3.22.1;
 the CMake 3.5.1 compatibility branch has not been executed locally.
 
@@ -239,6 +303,8 @@ python3 scripts/summarize_gd_nag.py \
 
 See [`docs/GD_NAG_COMPARISON.md`](docs/GD_NAG_COMPARISON.md) for the controlled
 methodology and the checked-in two-repeat, four-epoch smoke measurement.
+See [`docs/NAG_STATE_PACKING_RESULTS.md`](docs/NAG_STATE_PACKING_RESULTS.md) for
+the preliminary separate-versus-packed NAG state measurements.
 
 The experiment retains the lab default of 100 epochs for both datasets and both
 refresh methods. Packing reduces the number of encrypted operations. For a
@@ -336,12 +402,15 @@ selected state representation.
 │   └── framingham.csv
 ├── docs/
 │   ├── DESIGN.md
-│   ├── RESULTS.md
-│   └── PACKED_RESULTS.md
+│   ├── GD_NAG_COMPARISON.md
+│   ├── NAG_STATE_PACKING_RESULTS.md
+│   ├── PACKED_RESULTS.md
+│   └── RESULTS.md
 ├── include/openfhe_lab/
 ├── results/
-│   ├── benchmark.csv
-│   └── benchmark_packed.csv
+│   ├── benchmark*.csv
+│   ├── nag_packed.csv
+│   └── nag_separate.csv
 ├── scripts/
 ├── src/
 └── tests/

@@ -10,8 +10,17 @@ The local adaptation adds multiple ciphertext blocks and an explicit valid-row
 mask while preserving this project's separate bias and default lab optimizer.
 The optional fixed-momentum Nesterov update in `src/logistic_regression.cpp`
 and `src/ckks_logistic_regression.cpp` is also adapted from `lr_nag.cpp` at the
-same commit, including its first step without momentum. Both retained optimizer
-states are refreshed using this project's separate weight/bias layout.
+same commit, including its first step without momentum.
+
+The default NAG representation retains this project's separate encrypted
+weight and bias ciphertexts for both theta and phi. The optional packed NAG
+representation also adapts the upstream sparse state-packing approach: theta
+and phi occupy alternating model rows in one ciphertext, bias is represented
+as an intercept coordinate, masks and row rotations extract the states, and
+the updated rows are merged before refresh. The local work integrates that
+approach with this project's multiple input blocks, selectable sigmoid circuits,
+simulated/real refresh comparison, per-epoch metrics, and separate-state
+compatibility mode.
 
 ## Upstream BSD 2-Clause License
 

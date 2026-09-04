@@ -7,9 +7,10 @@
 - [x] Add optional Nesterov accelerated gradient to plaintext and encrypted training, including state refresh and tests.
 - [x] Add a repeatable, controlled GD-vs-NAG runner and aggregate convergence/runtime summaries.
 - [x] Add selectable upstream-style one-ciphertext NAG packing while retaining the separate approach.
+- [x] Add selectable cubic and degree-59 Chebyshev sigmoid approximations.
+- [x] Document preliminary 20-epoch separate-vs-packed NAG measurements and their limitations.
+- [ ] Run repeated, order-balanced separate-vs-packed NAG benchmarks and report mean and sample standard deviation.
 - [ ] Compare NAG and GD convergence and total runtime in repeated, controlled runs.
 - [ ] Collect and report full repeated 100-epoch GD-vs-NAG encrypted measurements.
-- [ ] Try different sigmoid approximations.
+- [ ] Migrate and revalidate the experiment on a current OpenFHE release.
 - [ ] Dockerize the project for reproducible builds and execution.
-- [x] merge feature/compare-GD-NAG
-- [x] merge feature/approximate-sigmoid. Users can choose between sigmoid approximations (cubic polynomial used in the lab, or chebyshev approximation used by OpenFHE logistic regression example repo)

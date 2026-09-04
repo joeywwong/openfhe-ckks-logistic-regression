@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -16,6 +17,18 @@ void Require(bool condition, const std::string& message) {
     }
 }
 
+double AverageAugmentedFeatureL1Norm(const labml::Dataset& data) {
+    double total = 0.0;
+    for (const auto& sample : data) {
+        double norm = 1.0;  // Bias/intercept coordinate.
+        for (const double feature : sample.features) {
+            norm += std::abs(feature);
+        }
+        total += norm;
+    }
+    return total / static_cast<double>(data.size());
+}
+
 void CheckEncrypted(
     const labml::Dataset& data,
     std::size_t count,
@@ -24,6 +37,7 @@ void CheckEncrypted(
     // Only subsets of the user's two lab datasets, not replacement datasets.
     const auto split = labml::LabTrainTestSplit(data);
     const labml::Dataset train(split.train.begin(), split.train.begin() + count);
+    const double averageAugmentedFeatureNorm = AverageAugmentedFeatureL1Norm(train);
     std::vector<labfhe::NagPacking> nagPackings{
         labfhe::NagPacking::Separate};
     if (checkNesterov) {
@@ -105,8 +119,20 @@ void CheckEncrypted(
                     Require(std::isfinite(epoch.maximumPlaintextModelError) &&
                                 epoch.maximumPlaintextModelError < 1e-5,
                             "Packed encrypted model differs from the matching plaintext optimizer");
-                    Require(std::abs(epoch.loss - reference.epochs[index].loss) < 1e-6,
-                            "Packed encrypted loss differs from plaintext");
+                    // Binary logistic loss is 1-Lipschitz in the linear score.
+                    // If every coefficient differs by at most delta, the mean
+                    // loss difference is bounded by
+                    // delta * mean(1 + ||x||_1), up to floating-point rounding.
+                    const double lossDifference =
+                        std::abs(epoch.loss - reference.epochs[index].loss);
+                    const double lossTolerance =
+                        1e-10 + epoch.maximumPlaintextModelError * averageAugmentedFeatureNorm;
+                    std::ostringstream lossMessage;
+                    lossMessage << "Encrypted loss differs from plaintext beyond the "
+                                << "coefficient-error sensitivity bound: difference="
+                                << lossDifference << ", tolerance=" << lossTolerance
+                                << ", model_error=" << epoch.maximumPlaintextModelError;
+                    Require(lossDifference <= lossTolerance, lossMessage.str());
                     Require(std::abs(epoch.accuracy - reference.epochs[index].accuracy) < 1e-12,
                             "Packed encrypted accuracy differs from plaintext");
                     if (epoch.refreshed) {
@@ -147,8 +173,9 @@ int main(int argc, char* argv[]) {
             ? labml::SigmoidApproximation::Chebyshev : labml::SigmoidApproximation::Cubic;
         CheckEncrypted(labml::LoadLogRegSample(argv[1]), 13, true, sigmoid);
         // 128 rows fit in a 9-feature block; 129 exercises cross-block sums
-        // and a heavily padded final block, especially its bias gradient.
-        CheckEncrypted(labml::LoadAndPrepareFramingham(argv[2]), 129, false, sigmoid);
+        // and a heavily padded final block, including packed NAG's intercept
+        // and alternating theta/phi state layout.
+        CheckEncrypted(labml::LoadAndPrepareFramingham(argv[2]), 129, true, sigmoid);
         std::cout << "Encrypted GD/NAG packing, refresh, and post-bootstrap continuation tests passed\n";
         return 0;
     }

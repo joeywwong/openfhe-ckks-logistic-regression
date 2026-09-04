@@ -21,7 +21,7 @@ Both refresh methods use the same packed circuit.
 | Optimizer | Full-batch gradient descent by default; optional NAG |
 | Default run | 100 epochs and learning rate 0.01 |
 | Encrypted input | Features and labels remain encrypted; multiple samples now share each block |
-| Model layout | Encrypted weights and encrypted bias are separate ciphertexts |
+| Default model layout | Encrypted weights and encrypted bias are separate ciphertexts; packed NAG optionally combines both complete optimizer states |
 | Forward sigmoid | `--sigmoid cubic` (default): lab polynomial `0.5 + 0.197*x - 0.004*x^3`; `--sigmoid chebyshev`: degree 59 on `[-16, 16]` |
 | Gradient | `(prediction-label)*x` and `(prediction-label)` for bias |
 | Accuracy | Decrypt model, classify the plaintext test set at linear score zero |
