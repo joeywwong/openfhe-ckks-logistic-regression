@@ -13,4 +13,4 @@
 - [ ] Compare NAG and GD convergence and total runtime in repeated, controlled runs.
 - [ ] Collect and report full repeated 100-epoch GD-vs-NAG encrypted measurements.
 - [ ] Migrate and revalidate the experiment on a current OpenFHE release.
-- [ ] Dockerize the project for reproducible builds and execution.
+- [x] Dockerize the project for reproducible builds and execution.

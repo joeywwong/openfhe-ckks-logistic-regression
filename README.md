@@ -247,6 +247,54 @@ mismatched plaintext references.
 No CMake presets are needed. The workflow was verified with CMake 3.22.1;
 the CMake 3.5.1 compatibility branch has not been executed locally.
 
+### Docker
+
+Docker provides the pinned OpenFHE 1.1.2 dependency and the project build in a
+multi-stage image. The OpenFHE source is pinned to the exact commit referenced
+by its `v1.1.2` tag. Build the runtime image with:
+
+```bash
+docker build --tag openfhe-logreg:local .
+docker run --rm openfhe-logreg:local
+```
+
+The default command prints the CLI help. Pass the normal program options after
+the image name. For example, this short run exercises encrypted training with
+simulated refresh:
+
+```bash
+docker run --rm openfhe-logreg:local \
+  --dataset logreg --refresh simulated --epochs 1 \
+  --output /tmp/docker-smoke.csv
+```
+
+To keep the result CSV, mount the host `results` directory at
+`/opt/openfhe-lab/results` and select an output path below that directory.
+For example, from Bash or WSL:
+
+```bash
+mkdir -p results
+docker run --rm \
+  --mount "type=bind,source=$(pwd)/results,target=/opt/openfhe-lab/results" \
+  openfhe-logreg:local \
+  --dataset logreg --refresh simulated --epochs 1 \
+  --output /opt/openfhe-lab/results/docker-smoke.csv
+```
+
+The dedicated `test` target builds the project and runs the complete CTest
+suite, including encrypted integration and real-bootstrapping tests:
+
+```bash
+docker build --target test --tag openfhe-logreg:test .
+```
+
+OpenFHE and project compilation default to two parallel jobs to avoid excessive
+memory use. Override that when the Docker host has sufficient resources:
+
+```bash
+docker build --build-arg BUILD_JOBS=4 --tag openfhe-logreg:local .
+```
+
 ## Run the comparison
 
 ### Controlled gradient descent versus Nesterov accelerated gradient comparison

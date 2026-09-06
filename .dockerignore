@@ -1,0 +1,16 @@
+.git
+.gitignore
+build
+cmake-build-*
+tmp
+output
+results
+__pycache__
+*.py[cod]
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.dylib
+*.exe
