@@ -176,9 +176,9 @@ $M_\theta,M_\phi$ the complementary masks. The row-cloned states are
 
 ```math
 \widetilde{\theta}_t=M_\theta\odot S_t+
-\operatorname{Rot}_{+R}(M_\theta\odot S_t),\qquad
+\mathrm{Rot}_{+R}(M_\theta\odot S_t),\qquad
 \widetilde{\phi}_t=M_\phi\odot S_t+
-\operatorname{Rot}_{-R}(M_\phi\odot S_t),
+\mathrm{Rot}_{-R}(M_\phi\odot S_t),
 ```
 
 and the updated row-cloned states are repacked as
