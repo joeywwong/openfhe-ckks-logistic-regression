@@ -161,10 +161,34 @@ Select the encrypted optimizer storage with `--nag-packing separate|packed`:
   each have an encrypted weight vector and encrypted bias, for four periodic
   ciphertexts.
 - `packed` uses the official example's technique. Bias becomes an intercept
-  coordinate, so each complete model row is `[weights, bias, padding]`. Even
-  rows hold theta and odd rows hold phi. Alternating masks and one
-  `+rowWidth` or `-rowWidth` rotation reconstruct each row-cloned state before
-  the gradient; masks merge the updated states again before refresh.
+  coordinate, so each complete model row is `[weights, bias, padding]`, and one
+  ciphertext alternates complete state rows as `[theta][phi][theta][phi]...`.
+  "Even" and "odd" refer to row blocks, not individual slots. A public theta
+  mask contains ones over theta rows and zeros over phi rows; the complementary
+  phi mask does the reverse. Multiplying by a mask isolates one state, and
+  adding a copy rotated by `+rowWidth` for theta or `-rowWidth` for phi fills
+  the zero rows, producing row-cloned theta and phi for the gradient. After the
+  NAG update, the same masks retain `theta_next` in even rows and `phi_next` in
+  odd rows; adding them recreates the alternating one-ciphertext state.
+
+Equivalently, let $S_t$ be the packed state, $R$ the row width, and
+$M_\theta,M_\phi$ the complementary masks. The row-cloned states are
+
+```math
+\widetilde{\theta}_t=M_\theta\odot S_t+
+\operatorname{Rot}_{+R}(M_\theta\odot S_t),\qquad
+\widetilde{\phi}_t=M_\phi\odot S_t+
+\operatorname{Rot}_{-R}(M_\phi\odot S_t),
+```
+
+and the updated row-cloned states are repacked as
+
+```math
+S_{t+1}=M_\theta\odot\widetilde{\theta}_{t+1}+
+M_\phi\odot\widetilde{\phi}_{t+1},
+```
+
+where $\odot$ denotes slot-wise multiplication.
 
 The packed representation stores and bootstraps the entire NAG state in one
 ciphertext, matching the upstream design. It needs two model rows in the sparse
