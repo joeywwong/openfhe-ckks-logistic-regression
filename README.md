@@ -105,7 +105,7 @@ See [`docs/DESIGN.md`](docs/DESIGN.md) for the full mapping to the original lab.
 
 The project trains a binary logistic-regression model while the training data and model state are represented with CKKS ciphertexts.
 
-For a sample \(x_i \in \mathbb{R}^d\), label \(y_i \in \{0,1\}\), weights \(w\), and bias \(b\), the linear score is
+For a sample $x_i \in \mathbb{R}^d$, label $y_i \in \{0,1\}$, weights $w$, and bias $b$, the linear score is
 
 ```math
 z_i = w^\top x_i + b.
@@ -123,7 +123,7 @@ The implementation predicts class 1 when
 z_i \ge 0.
 ```
 
-Since \(\sigma(0)=0.5\), this is equivalent to thresholding the exact sigmoid at 0.5.
+Since $\sigma(0)=0.5$, this is equivalent to thresholding the exact sigmoid at 0.5.
 
 ### Loss
 
@@ -169,9 +169,9 @@ and
 
 Directly evaluating the exponential is not suitable for the CKKS arithmetic circuit used here.
 
-Training therefore replaces \(\sigma\) with a polynomial approximation \(\widetilde{\sigma}\).
+Training therefore replaces $\sigma$ with a polynomial approximation $\widetilde{\sigma}$.
 
-For the training matrix \(X\) and labels \(y\),
+For the training matrix $X$ and labels $y$,
 
 ```math
 z=Xw+b\mathbf{1},
@@ -209,7 +209,7 @@ b_{t+1}
 b_t-\eta\widetilde{g}_{b,t},
 ```
 
-where \(\eta\) is the learning rate.
+where $\eta$ is the learning rate.
 
 GD is the default optimizer because it matches the original lab.
 
@@ -223,7 +223,7 @@ Nesterov accelerated gradient is available with
 
 The implementation follows the fixed-momentum recurrence used by the official [OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples).
 
-For \(t=0,1,\ldots\),
+For $t=0,1,\ldots$,
 
 ```math
 \begin{aligned}
@@ -246,12 +246,12 @@ For \(t=0,1,\ldots\),
 
 Here:
 
-- \(\theta_t\) is the model used to evaluate the gradient;
-- \(\phi_t\) is the previous unaccelerated gradient-step model;
-- \(\eta\) is the learning rate;
-- \(\mu\) is the momentum coefficient.
+- $\theta_t$ is the model used to evaluate the gradient;
+- $\phi_t$ is the previous unaccelerated gradient-step model;
+- $\eta$ is the learning rate;
+- $\mu$ is the momentum coefficient.
 
-The first epoch is an ordinary gradient step because \(\beta_0=0\).
+The first epoch is an ordinary gradient step because $\beta_0=0$.
 
 The default momentum is `0.1`. It must be in `[0,1)`. Momentum `0` reduces the recurrence to GD.
 
@@ -263,16 +263,16 @@ The packed implementation maps the logistic-regression computation to CKKS SIMD 
 
 | Logistic-regression step | Algebra | Packed OpenFHE operation |
 |---|---|---|
-| Linear feature products | \(x_i \odot w\) | `EvalMult` |
-| Dot product | \(x_i^\top w\) | `EvalSumCols` within each packed row |
-| Add bias | \(x_i^\top w+b\) | ciphertext addition |
-| Approximate sigmoid | \(\widetilde{\sigma}(z_i)\) | cubic circuit or `EvalLogistic` |
-| Error | \(\widetilde{\sigma}(z_i)-y_i\) | ciphertext subtraction |
-| Weight-gradient terms | \(x_i e_i\) | `EvalMult` |
-| Sum over samples | \(\sum_i x_i e_i\) | `EvalSumRows` |
-| Bias gradient | \(\sum_i e_i\) | masked `EvalSumRows`, or intercept coordinate in packed NAG |
-| Full-batch update | \(\theta-\eta g\) | ciphertext/plaintext multiplication and addition |
-| NAG extrapolation | \(\phi_{t+1}+\mu(\phi_{t+1}-\phi_t)\) | ciphertext subtraction, scalar multiplication, and addition |
+| Linear feature products | $x_i \odot w$ | `EvalMult` |
+| Dot product | $x_i^\top w$ | `EvalSumCols` within each packed row |
+| Add bias | $x_i^\top w+b$ | ciphertext addition |
+| Approximate sigmoid | $\widetilde{\sigma}(z_i)$ | cubic circuit or `EvalLogistic` |
+| Error | $\widetilde{\sigma}(z_i)-y_i$ | ciphertext subtraction |
+| Weight-gradient terms | $x_i e_i$ | `EvalMult` |
+| Sum over samples | $\sum_i x_i e_i$ | `EvalSumRows` |
+| Bias gradient | $\sum_i e_i$ | masked `EvalSumRows`, or intercept coordinate in packed NAG |
+| Full-batch update | $\theta-\eta g$ | ciphertext/plaintext multiplication and addition |
+| NAG extrapolation | $\phi_{t+1}+\mu(\phi_{t+1}-\phi_t)$ | ciphertext subtraction, scalar multiplication, and addition |
 
 This mapping is described in more detail in [`docs/DESIGN.md`](docs/DESIGN.md#packed-ciphertext-layout).
 
@@ -382,8 +382,8 @@ complementary phi mask does the reverse. Multiplying by the corresponding mask
 isolates one optimizer state, and adding a copy rotated by one row width fills
 the missing rows.
 
-Let \(S_t\) denote the packed state, \(R\) the row width, and
-\(M_\theta,M_\phi\) the complementary public masks. The row-cloned states are
+Let $S_t$ denote the packed state, $R$ the row width, and
+$M_\theta,M_\phi$ the complementary public masks. The row-cloned states are
 
 ```math
 \widetilde{\theta}_t
@@ -403,7 +403,7 @@ M_\phi\odot S_t
 \left(M_\phi\odot S_t\right),
 ```
 
-where \(\odot\) denotes slot-wise multiplication.
+where $\odot$ denotes slot-wise multiplication.
 
 After applying the NAG recurrence, the updated states are combined again as
 
