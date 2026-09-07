@@ -2,59 +2,42 @@
 
 > Tested with OpenFHE 1.1.2
 
-OpenFHE 1.1.2 is intentionally pinned to preserve comparability with the
-original lab environment. Migrating and revalidating the experiment on a
-current OpenFHE release is future work.
+This project implements encrypted logistic-regression training in C++ with OpenFHE and CKKS.
 
-This project is built from my template project
-[`openfhe-template`](https://github.com/joeywwong/openfhe-template) and ports the
-original
-[`fhe-ckks-lwe-encrypted-ml-lab`](https://github.com/joeywwong/fhe-ckks-lwe-encrypted-ml-lab)
-from TenSEAL to C++/OpenFHE.
+It ports my original [`fhe-ckks-lwe-encrypted-ml-lab`](https://github.com/joeywwong/fhe-ckks-lwe-encrypted-ml-lab) from Python/TenSEAL to OpenFHE. It is built from my [`openfhe-template`](https://github.com/joeywwong/openfhe-template).
 
-It preserves the lab's encrypted logistic-regression experiment and compares
-two ways of refreshing the encrypted weights and bias:
+OpenFHE 1.1.2 is intentionally pinned so that the results remain comparable with the original lab. Migrating and revalidating the project on a newer OpenFHE release is future work.
 
-- **Simulated bootstrapping:** decrypt the model and encrypt it again, matching
-  the workaround used in the lab when TenSEAL did not support CKKS
-  bootstrapping.
-- **Real bootstrapping:** call OpenFHE's non-interactive `EvalBootstrap` on the
-  encrypted weights and encrypted bias once enough natural levels have been
-  consumed for OpenFHE to return a genuinely refreshed ciphertext.
+The project keeps the original lab experiment, then adds:
 
-Only `LogReg_sample_dataset.csv` and `framingham.csv` are used.
+- genuine non-interactive CKKS bootstrapping with `EvalBootstrap`;
+- row-major CKKS SIMD packing for training samples;
+- gradient descent (GD) and Nesterov accelerated gradient (NAG);
+- separate or one-ciphertext packing of the complete NAG state;
+- cubic or degree-59 Chebyshev sigmoid approximation;
+- plaintext-reference validation for encrypted training.
 
-Training samples now use **row-major CKKS SIMD packing**, adapted from the
-[official OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples).
-The forward pass supports that example's degree-59 Chebyshev approximation
-of the logistic function over `[-16, 16]`, or the original lab/main-branch
-cubic `0.5 + 0.197*x - 0.004*x^3`. The lab cubic is the default.
-Full-batch Nesterov accelerated gradient (NAG), adapted from the same example,
-is optional; ordinary gradient descent (GD) remains the default. NAG users can
-retain the existing separate state or put the complete theta/phi state in one
-ciphertext, as in the example.
+The two datasets are `LogReg_sample_dataset.csv` and `framingham.csv`.
 
 ## Improvements over the original lab
 
-| Aspect | Original lab implementation | Current OpenFHE project |
+| Aspect | Original lab | Current OpenFHE project |
 |---|---|---|
 | Implementation | Python/TenSEAL | C++17/OpenFHE |
-| Ciphertext bootstrapping/refresh | ❌: 'Simulated bootstrapping' - decrypt and re-encrypt with the secret key | ✅: Genuine non-interactive `EvalBootstrap` |
-| SIMD packing for training-data | ❌: One feature ciphertext and one label ciphertext per sample | ✅: Row-major SIMD blocks; Framingham input reduced from 1,560 to 14 ciphertexts |
-| Optimizer | Full-batch gradient descent | Full-batch GD (default) or fixed-momentum Nesterov accelerated gradient |
-| Packing of model parameters, NAG state | ❌: One ciphertext per model parameter, NAG state | Four separate theta/phi weight/bias ciphertexts or one packed ciphertext |
-| Sigmoid approximation | Cubic approximation | Original cubic (default) or degree-59 Chebyshev approximation (more accurate, but additional multiplication depth) |
+| Model refresh | Decrypt and re-encrypt | Simulated refresh or genuine `EvalBootstrap` |
+| Training-data packing | One feature ciphertext and one label ciphertext per sample | Row-major SIMD blocks |
+| Framingham encrypted input | 1,560 ciphertexts | 14 ciphertexts |
+| Optimizer | Full-batch GD | Full-batch GD or NAG |
+| NAG state | Not used | Four separate ciphertexts or one packed ciphertext |
+| Sigmoid approximation | Cubic polynomial | Cubic or degree-59 Chebyshev |
+| Validation | Lab experiment | Encrypted epochs checked against a plaintext reference |
 
 ## Project highlights
 
-- **End-to-end encrypted training:** the project evaluates full-batch
-  logistic-regression updates on CKKS ciphertexts and continues training after
-  genuine non-interactive `EvalBootstrap` refreshes.
-- **Genuine bootstrapping and an explicit confidentiality boundary:** compare
-  OpenFHE's non-interactive `EvalBootstrap`, which refreshes the encrypted model
-  state without decrypting it, with the lab's decrypt-and-re-encrypt workaround.
-  The workaround is faster, but it requires secret-key
-  access and exposes the plaintext model parameters to the secret-key holder.
+- **Genuine CKKS bootstrapping.** OpenFHE `EvalBootstrap` refreshes the encrypted model without decrypting it.
+
+- **Explicit comparison with simulated bootstrapping.** The original lab workaround decrypts and re-encrypts the model. This is useful as a timing baseline, but it requires the secret key and exposes the plaintext model to the key holder.
+
 - **SIMD sample packing and substantially lower training time:** row-major
   dataset packing, multiple ciphertext blocks, and padding masks reduce the
   encrypted Framingham training input from 1,560 ciphertexts to 14, while
@@ -64,87 +47,87 @@ ciphertext, as in the example.
   which is about 27x faster. With NAG state packing, the preliminary runtime
   was approximately 4.5 seconds per epoch, about 51x faster than the historical
   unpacked measurement.
-- **Improvements over the original lab:** compare the lab's original training
-  configuration with current alternatives and measure their effects on runtime,
-  convergence, ciphertext count, bootstrapping, consumed levels, numerical
-  accuracy, and model quality:
-  1. gradient descent (GD) used in the original lab vs fixed-momentum
-     Nesterov accelerated gradient (NAG);
-  2. model parameters and NAG states separated into two/four ciphertexts vs
-     the complete NAG state packed into one ciphertext;
-  3. the cubic sigmoid approximation used in the lab vs a degree-59 Chebyshev
-     approximation.
-- **Plaintext-referenced validation:** integration tests compare every
-  encrypted epoch with an independent plaintext optimizer, exercise both
-  refresh methods and sigmoid circuits, and continue after a real bootstrap.
 
-The newest optimization packs the complete periodic NAG state—theta, phi,
-weights, and intercept—into one ciphertext instead of four. In preliminary
-single-run, 20-epoch measurements, it produced the following result:
+- **Full-batch training across multiple ciphertext blocks.** Gradients from all blocks are accumulated before one model update. Padded rows do not change the training result.
 
-| Dataset | Separate NAG state | Packed NAG state | Observed total-time reduction | Observed speedup |
+- **Selectable optimizer.** GD remains the default. Fixed-momentum NAG is also available.
+
+- **One-ciphertext NAG state.** The complete theta/phi optimizer state can be packed into one ciphertext instead of four periodically refreshed ciphertexts.
+
+- **Selectable sigmoid circuit.** Training can use the original cubic approximation or the degree-59 Chebyshev approximation used by the official OpenFHE logistic-regression example.
+
+- **Plaintext-referenced tests.** Encrypted epochs are compared with an independent plaintext optimizer. Tests cover packing, padding, both sigmoid circuits, NAG, and training after genuine bootstrapping.
+
+## Performance observations
+
+### Sample packing
+
+For the Framingham experiment, SIMD sample packing reduced the encrypted training input from 1,560 ciphertexts to 14.
+
+The historical unpacked implementation required about 230 seconds per epoch on the local test machine. The packed implementation requires about 8.5 seconds per epoch in the corresponding local measurements. This is about a 27x historical speedup.
+
+The measurements are specific to this implementation and machine. They are not general OpenFHE performance claims.
+
+### NAG state packing
+
+The newest optimization packs the complete NAG theta/phi state into one ciphertext.
+
+Preliminary 20-epoch measurements with real CKKS bootstrapping gave:
+
+| Dataset | Separate NAG state | Packed NAG state | Time reduction | Speedup |
 |---|---:|---:|---:|---:|
 | Framingham | 231.281 s | 85.462 s | 63.0% | 2.71x |
 | LogReg sample | 137.176 s | 45.456 s | 66.9% | 3.02x |
 
-Both layouts reached the same final test accuracy; their final training losses
-differed by less than `9e-8`. These are local observations, not statistically
-established or production-secure performance claims. The runs were not
-repeated or order-balanced. See the
-[NAG state-packing report](docs/NAG_STATE_PACKING_RESULTS.md) for the timing
-breakdown, accuracy checks, trade-offs, raw-data links, and limitations.
+Both layouts reached the same displayed final test accuracy. Their final training losses differed by less than `9e-8`.
 
-## Default experiment behavior
+These are preliminary single-run observations. The runs were not repeated or order-balanced. See [`docs/NAG_STATE_PACKING_RESULTS.md`](docs/NAG_STATE_PACKING_RESULTS.md) for the timing breakdown, numerical checks, trade-offs, and limitations.
+
+## Default experiment
+
+The defaults preserve the original lab as closely as possible:
 
 - 70% training and 30% test data after a seed-4 shuffle;
 - zero-initialized binary logistic regression;
-- full-batch gradient descent, 100 epochs, learning rate 0.01;
-- original lab cubic sigmoid `0.5 + 0.197*x - 0.004*x^3` in plaintext and ciphertext training;
-- encrypted features and labels, now batched into row-major ciphertext blocks;
+- full-batch gradient descent;
+- 100 epochs;
+- learning rate `0.01`;
+- cubic training sigmoid `0.5 + 0.197*x - 0.004*x^3`;
+- encrypted features and labels;
 - separate encrypted weight and bias ciphertexts;
-- per-epoch test accuracy and exact-sigmoid training loss after model decryption;
-- the lab's exact Framingham column removal, class balancing, and full-dataset
-  standardization order.
+- exact-sigmoid training loss for reporting;
+- test accuracy after model decryption;
+- the original Framingham preprocessing and class-balancing order.
 
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the one-to-one mapping and timing
-definitions.
+See [`docs/DESIGN.md`](docs/DESIGN.md) for the full mapping to the original lab.
 
 ## Logistic regression
 
-This project trains binary logistic-regression models while the training data
-and model state are represented with CKKS ciphertexts.
+The project trains a binary logistic-regression model while the training data and model state are represented with CKKS ciphertexts.
 
-For a sample $x_i \in \mathbb{R}^d$, binary label $y_i \in \{0,1\}$, weight
-vector $w \in \mathbb{R}^d$, and bias $b$, the model first computes the linear
-score
+For a sample \(x_i \in \mathbb{R}^d\), label \(y_i \in \{0,1\}\), weights \(w\), and bias \(b\), the linear score is
 
 ```math
 z_i = w^\top x_i + b.
 ```
 
-Standard logistic regression maps this score to a probability using the
-logistic sigmoid:
+The exact logistic sigmoid is
 
 ```math
 \sigma(z_i)=\frac{1}{1+e^{-z_i}}.
 ```
 
-The implementation predicts class 1 when the linear score is non-negative:
+The implementation predicts class 1 when
 
 ```math
-\widehat{y}_i =
-\begin{cases}
-1, & z_i \ge 0, \\
-0, & z_i < 0.
-\end{cases}
+z_i \ge 0.
 ```
 
-Because $\sigma(0)=0.5$, this is equivalent to thresholding the exact logistic
-probability at 0.5.
+Since \(\sigma(0)=0.5\), this is equivalent to thresholding the exact sigmoid at 0.5.
 
 ### Loss
 
-Reported training loss uses the exact sigmoid and mean binary cross-entropy:
+Reported training loss uses mean binary cross-entropy:
 
 ```math
 L(w,b)
@@ -154,26 +137,24 @@ L(w,b)
 \left[
 y_i\log\sigma(z_i)
 +
-(1-y_i)\log\left(1-\sigma(z_i)\right)
+(1-y_i)\log(1-\sigma(z_i))
 \right].
 ```
 
-The implementation clamps probabilities slightly away from exactly 0 and 1
-before taking logarithms for numerical stability.
+Probabilities are moved slightly away from exactly 0 and 1 before the logarithm for numerical stability.
 
-This exact sigmoid is used for **reported loss only**. The homomorphic training
-circuit instead uses one of the polynomial approximations described below.
+The exact sigmoid is used for **reported loss only**. Homomorphic training uses a polynomial approximation.
 
 ### Gradient used for training
 
-With the exact sigmoid, the full-batch logistic-regression gradients are
+With the exact sigmoid, the full-batch gradients are
 
 ```math
 \nabla_w L
 =
 \frac{1}{n}
 \sum_{i=1}^{n}
-x_i\left(\sigma(z_i)-y_i\right),
+x_i(\sigma(z_i)-y_i),
 ```
 
 and
@@ -183,34 +164,14 @@ and
 =
 \frac{1}{n}
 \sum_{i=1}^{n}
-\left(\sigma(z_i)-y_i\right).
+(\sigma(z_i)-y_i).
 ```
 
-Direct evaluation of the exponential inside the sigmoid is not suitable for the
-CKKS arithmetic circuit used here. The trainer therefore replaces
-$\sigma$ with a polynomial approximation $\widetilde{\sigma}$.
+Directly evaluating the exponential is not suitable for the CKKS arithmetic circuit used here.
 
-The actual update direction evaluated by both the plaintext reference and the
-encrypted trainer is consequently
+Training therefore replaces \(\sigma\) with a polynomial approximation \(\widetilde{\sigma}\).
 
-```math
-\widetilde{g}_w
-=
-\frac{1}{n}
-\sum_{i=1}^{n}
-x_i\left(\widetilde{\sigma}(z_i)-y_i\right),
-```
-
-```math
-\widetilde{g}_b
-=
-\frac{1}{n}
-\sum_{i=1}^{n}
-\left(\widetilde{\sigma}(z_i)-y_i\right).
-```
-
-For the complete training matrix $X$ and label vector $y$, the same computation
-can be written as
+For the training matrix \(X\) and labels \(y\),
 
 ```math
 z=Xw+b\mathbf{1},
@@ -218,95 +179,114 @@ z=Xw+b\mathbf{1},
 e=\widetilde{\sigma}(z)-y,
 ```
 
+and
+
 ```math
-\widetilde{g}_w=\frac{1}{n}X^\top e,
+\widetilde{g}_w
+=
+\frac{1}{n}X^\top e,
 \qquad
-\widetilde{g}_b=\frac{1}{n}\mathbf{1}^\top e.
+\widetilde{g}_b
+=
+\frac{1}{n}\mathbf{1}^\top e.
 ```
 
-The encrypted implementation accumulates contributions from every packed
-ciphertext block before performing one update and divides by the actual number
-of training samples rather than the number of padded CKKS rows. It therefore
-remains a full-batch optimizer despite splitting the dataset across multiple
-ciphertexts.
+The encrypted trainer computes the same full-batch update. If the dataset spans several ciphertext blocks, it first adds the gradients from every block.
+
+It divides by the real number of training samples, not by the number of padded CKKS rows.
 
 ### Gradient descent
 
-Ordinary gradient descent updates the model once per complete training batch:
+Gradient descent updates the model as
 
 ```math
 w_{t+1}
 =
-w_t-\eta\,\widetilde{g}_{w,t},
+w_t-\eta\widetilde{g}_{w,t},
 \qquad
 b_{t+1}
 =
-b_t-\eta\,\widetilde{g}_{b,t},
+b_t-\eta\widetilde{g}_{b,t},
 ```
 
-where $\eta$ is the learning rate.
+where \(\eta\) is the learning rate.
 
-GD is the default optimizer so that the original lab configuration remains
-directly reproducible.
+GD is the default optimizer because it matches the original lab.
 
 ### Nesterov accelerated gradient
 
-Nesterov accelerated gradient (NAG) is available as an alternative optimizer.
-It evaluates the gradient at a look-ahead model and uses the difference between
-successive unaccelerated gradient steps to introduce momentum.
+Nesterov accelerated gradient is available with
 
-This project follows the
-[OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples/blob/b9f38f4e8e6fc93ef5d2a3a5d880f80e72d0484d/lr_nag.cpp#L436-L478)
-and uses fixed momentum after the first epoch.
+```text
+--optimizer nag
+```
 
-For $t=0,1,\ldots$,
+The implementation follows the fixed-momentum recurrence used by the official [OpenFHE logistic-regression example](https://github.com/openfheorg/openfhe-logreg-training-examples).
+
+For \(t=0,1,\ldots\),
 
 ```math
 \begin{aligned}
-\theta_0 &= \phi_0 = \theta_{\mathrm{init}},
-\qquad
-\theta_{\mathrm{init}} = 0
-\text{ in this implementation}, \\
+\theta_0 &= \phi_0 = 0,\\
 \beta_t &=
 \begin{cases}
-0, & t=0, \\
+0, & t=0,\\
 \mu, & t>0,
-\end{cases} \\
+\end{cases}\\
 \phi_{t+1}
 &=
-\theta_t-\eta\,g(\theta_t), \\
+\theta_t-\eta g(\theta_t),\\
 \theta_{t+1}
 &=
 \phi_{t+1}
 +
-\beta_t\left(\phi_{t+1}-\phi_t\right).
+\beta_t(\phi_{t+1}-\phi_t).
 \end{aligned}
 ```
 
-where:
+Here:
 
-- $\theta_t$ is the look-ahead model used to compute the gradient;
-- $\phi_t$ is the previous unaccelerated gradient-step model;
-- $\eta$ is the learning rate;
-- $\mu$ is the configured momentum coefficient;
-- $g(\theta_t)$ is the full-batch update direction using the selected sigmoid
-  approximation.
+- \(\theta_t\) is the model used to evaluate the gradient;
+- \(\phi_t\) is the previous unaccelerated gradient-step model;
+- \(\eta\) is the learning rate;
+- \(\mu\) is the momentum coefficient.
 
-The first epoch is an ordinary gradient step because $\beta_0=0$.
+The first epoch is an ordinary gradient step because \(\beta_0=0\).
 
-Select NAG with `--optimizer nag`. The default momentum is `0.1`, it must be
-finite and in `[0,1)`, and a momentum of zero reduces the recurrence to GD.
+The default momentum is `0.1`. It must be in `[0,1)`. Momentum `0` reduces the recurrence to GD.
 
-Compared with GD, nonzero-momentum NAG may reach a target loss in fewer epochs,
-but this is not guaranteed for the fixed-momentum implementation at the same
-learning rate. In encrypted training it also retains two optimizer states
-instead of one and introduces additional homomorphic arithmetic.
+NAG may reduce the number of epochs needed to reach a target loss. This is not guaranteed for every dataset or learning rate. It also requires additional encrypted optimizer state.
+
+### From logistic-regression algebra to packed OpenFHE operations
+
+The packed implementation maps the logistic-regression computation to CKKS SIMD operations as follows:
+
+| Logistic-regression step | Algebra | Packed OpenFHE operation |
+|---|---|---|
+| Linear feature products | \(x_i \odot w\) | `EvalMult` |
+| Dot product | \(x_i^\top w\) | `EvalSumCols` within each packed row |
+| Add bias | \(x_i^\top w+b\) | ciphertext addition |
+| Approximate sigmoid | \(\widetilde{\sigma}(z_i)\) | cubic circuit or `EvalLogistic` |
+| Error | \(\widetilde{\sigma}(z_i)-y_i\) | ciphertext subtraction |
+| Weight-gradient terms | \(x_i e_i\) | `EvalMult` |
+| Sum over samples | \(\sum_i x_i e_i\) | `EvalSumRows` |
+| Bias gradient | \(\sum_i e_i\) | masked `EvalSumRows`, or intercept coordinate in packed NAG |
+| Full-batch update | \(\theta-\eta g\) | ciphertext/plaintext multiplication and addition |
+| NAG extrapolation | \(\phi_{t+1}+\mu(\phi_{t+1}-\phi_t)\) | ciphertext subtraction, scalar multiplication, and addition |
+
+This mapping is described in more detail in [`docs/DESIGN.md`](docs/DESIGN.md#packed-ciphertext-layout).
 
 ## Sigmoid approximation
 
-The training sigmoid is selected with `--sigmoid chebyshev|cubic`.
+Choose the training sigmoid with
 
-The default is the cubic polynomial used in the original lab:
+```text
+--sigmoid cubic|chebyshev
+```
+
+### Cubic
+
+The default is the polynomial used by the original lab:
 
 ```math
 \widetilde{\sigma}_{\mathrm{cubic}}(z)
@@ -314,62 +294,62 @@ The default is the cubic polynomial used in the original lab:
 0.5+0.197z-0.004z^3.
 ```
 
-The alternative is the degree-59 Chebyshev approximation of the logistic
-function over `[-16,16]` used by the official OpenFHE logistic-regression
-example.
+This polynomial is not a degree-3 Chebyshev fit.
 
-| Choice | Training sigmoid | Post-bootstrap levels, separate / packed NAG | Total depth, separate / packed NAG |
+### Chebyshev
+
+The alternative is the degree-59 Chebyshev approximation of the logistic function over `[-16,16]` used by the official OpenFHE logistic-regression example.
+
+| Choice | Approximation | Post-bootstrap levels, separate / packed NAG | Total depth, separate / packed NAG |
 |---|---|---:|---:|
-| `cubic` (default) | Original lab polynomial `0.5 + 0.197*x - 0.004*x^3` | 10 / 12 | 29 / 31 |
-| `chebyshev` | Degree-59 Chebyshev series on `[-16, 16]` | 16 / 18 | 35 / 37 |
+| `cubic` | `0.5 + 0.197*x - 0.004*x^3` | 10 / 12 | 29 / 31 |
+| `chebyshev` | Degree 59 on `[-16,16]` | 16 / 18 | 35 / 37 |
 
-The selection applies to both plaintext and encrypted training, with either
-GD or NAG and either refresh method. The cubic option is the original
-polynomial and is not a degree-3 Chebyshev fit. Neither approximation is
-clamped.
+The Chebyshev approximation is more accurate over its target interval, but it needs more multiplicative depth.
 
-The Chebyshev approximation provides greater approximation accuracy over its
-target interval but requires substantially greater multiplicative depth than
-the cubic circuit.
+The selected approximation is used by both the plaintext reference and encrypted trainer.
 
-Reported loss always uses the exact sigmoid, and accuracy always classifies at
-linear score zero.
+Reported loss still uses the exact sigmoid.
+
+Example:
 
 ```bash
-./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --sigmoid chebyshev
-./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --sigmoid cubic
-
-# Both lab datasets:
-SIGMOID=cubic EPOCHS=4 ./scripts/run_comparison_wsl.sh
+./build/openfhe_lab_compare \
+  --dataset logreg --refresh both --epochs 4 \
+  --sigmoid chebyshev
 ```
 
 ## Sample packing
 
-Each ciphertext contains sample rows padded to a power-of-two feature width.
-Weights repeat across rows and labels repeat across columns.
+Training samples use row-major CKKS SIMD packing adapted from the official OpenFHE logistic-regression example.
 
-`EvalSumCols` computes row-wise scores and `EvalSumRows` aggregates gradients
-across samples. Gradient contributions from all ciphertext blocks are added
-before one full-batch optimizer update.
+Each ciphertext contains several sample rows. Each row is padded to a power-of-two width.
 
-Separate mode masks padded rows out of the bias gradient; packed NAG instead
-uses a zero intercept in padded rows.
+For the separate model layout:
+
+```text
+features: [x00,x01 | x10,x11 | x20,x21 | 0,0 | ...]
+labels:   [y0, y0  | y1, y1  | y2, y2  | 0,0 | ...]
+weights:  [w0, w1  | w0, w1  | w0, w1  | ...]
+bias:     [b,  b   | b,  b   | b,  b   | ...]
+```
+
+`EvalSumCols` computes each row's dot product.
+
+After the sigmoid and error calculation, `EvalSumRows` adds gradient contributions across sample rows.
+
+If a dataset needs several ciphertext blocks, gradients from all blocks are added before one optimizer update. The algorithm therefore remains full-batch training.
+
+Padded rows are excluded from the bias gradient.
 
 | Dataset | Training rows | Separate row width / blocks / input CTs | Packed NAG row width / blocks / input CTs |
 |---|---:|---:|---:|
 | LogReg sample | 700 | 2 / 1 / 2 | 4 / 2 / 4 |
 | Framingham | 780 | 16 / 7 / 14 | 16 / 7 / 14 |
 
-The existing ring dimension remains 4,096. Data use all 2,048 slots. The
-separate layout keeps the 16-slot sparse bootstrap.
+The demonstration ring dimension is 4,096, giving 2,048 logical CKKS slots.
 
-Packed NAG uses at least two model rows (32 slots for the 16-wide Framingham
-model) and combines bias with weights as an intercept coordinate.
-
-Multiplicative depth is selected according to the sigmoid approximation and NAG
-storage layout shown above. See
-[`docs/DESIGN.md`](docs/DESIGN.md#packed-ciphertext-layout) and the
-[historical cubic packed results](docs/PACKED_RESULTS.md).
+See [`docs/DESIGN.md`](docs/DESIGN.md#packed-ciphertext-layout) for the exact layout, masks, padding rules, and sparse-bootstrap configuration.
 
 ## NAG state packing
 
@@ -402,8 +382,8 @@ complementary phi mask does the reverse. Multiplying by the corresponding mask
 isolates one optimizer state, and adding a copy rotated by one row width fills
 the missing rows.
 
-Let $S_t$ denote the packed state, $R$ the row width, and
-$M_\theta,M_\phi$ the complementary public masks. The row-cloned states are
+Let \(S_t\) denote the packed state, \(R\) the row width, and
+\(M_\theta,M_\phi\) the complementary public masks. The row-cloned states are
 
 ```math
 \widetilde{\theta}_t
@@ -423,7 +403,7 @@ M_\phi\odot S_t
 \left(M_\phi\odot S_t\right),
 ```
 
-where $\odot$ denotes slot-wise multiplication.
+where \(\odot\) denotes slot-wise multiplication.
 
 After applying the NAG recurrence, the updated states are combined again as
 
@@ -460,13 +440,36 @@ See
 [`docs/NAG_STATE_PACKING_RESULTS.md`](docs/NAG_STATE_PACKING_RESULTS.md)
 for the preliminary performance measurements.
 
+## Refresh methods
+
+The project compares two model-refresh methods.
+
+### Simulated bootstrapping
+
+The updated encrypted model is decrypted and encrypted again after an epoch.
+
+This reproduces the workaround used in the original TenSEAL lab.
+
+It restores a fresh ciphertext, but it requires the secret key. The model is visible in plaintext to the secret-key holder during refresh.
+
+### Real bootstrapping
+
+OpenFHE's `EvalBootstrap` refreshes a worn CKKS ciphertext without decrypting it.
+
+The implementation waits until enough natural levels have been consumed for `EvalBootstrap` to produce a genuinely refreshed ciphertext. Refresh is therefore triggered by ciphertext level, not by a hard-coded epoch number.
+
+The real training branch continues only from the bootstrapped ciphertext. Any decryptions used for metrics or paired timing measurements do not feed back into training.
+
+Detailed level and timing rules are documented in [`docs/DESIGN.md`](docs/DESIGN.md#refresh-methods).
+
 ## Build and test
 
-Requirements:
+### Requirements
 
 - Ubuntu 22.04 or a comparable Linux/WSL environment;
-- CMake 3.5.1 or later and a C++17 compiler;
-- OpenFHE 1.1.2 installed with its CMake package at `/usr/local/lib/OpenFHE`.
+- CMake 3.5.1 or later;
+- a C++17 compiler;
+- OpenFHE 1.1.2.
 
 From WSL:
 
@@ -476,193 +479,121 @@ cd openfhe-ckks-logistic-regression
 ./scripts/build_and_test_wsl.sh
 ```
 
-Tests include plaintext checks, packing/padding checks, and encrypted tests on
-subsets of the two lab datasets, including training after a real bootstrap.
+The test suite includes:
 
-The tests also check NAG against an independent velocity formulation, zero
-momentum against GD, and encrypted NAG after real bootstrapping, for both
-sigmoid approximations.
+- plaintext logistic-regression tests;
+- sample-packing and padding tests;
+- GD and NAG checks;
+- zero-momentum NAG versus GD;
+- cubic and Chebyshev sigmoid circuits;
+- separate and packed NAG state;
+- encrypted/plaintext agreement;
+- real CKKS bootstrapping;
+- continued encrypted training after bootstrap;
+- multi-block Framingham packing.
 
-Packed NAG is exercised across the 129-row Framingham block boundary as well as
-on the LogReg layout.
+## Docker
 
-The tests use a logistic-loss sensitivity bound derived from the measured
-coefficient error, rather than an arbitrary fixed tolerance for randomized CKKS
-bootstrapping. They also reject mismatched plaintext references.
+Docker provides a reproducible OpenFHE 1.1.2 build.
 
-No CMake presets are needed. The workflow was verified with CMake 3.22.1;
-the CMake 3.5.1 compatibility branch has not been executed locally.
-
-### Docker
-
-Docker provides the pinned OpenFHE 1.1.2 dependency and the project build in a
-multi-stage image. The OpenFHE source is pinned to the exact commit referenced
-by its `v1.1.2` tag.
-
-Build the runtime image with:
+Build the runtime image:
 
 ```bash
 docker build --tag openfhe-logreg:local .
+```
+
+Show the CLI help:
+
+```bash
 docker run --rm openfhe-logreg:local
 ```
 
-The default command prints the CLI help. Pass the normal program options after
-the image name. For example, this short run exercises encrypted training with
-simulated refresh:
+Run a short encrypted experiment:
 
 ```bash
 docker run --rm openfhe-logreg:local \
-  --dataset logreg --refresh simulated --epochs 1 \
+  --dataset logreg \
+  --refresh simulated \
+  --epochs 1 \
   --output /tmp/docker-smoke.csv
 ```
 
-To keep the result CSV, mount the host `results` directory at
-`/opt/openfhe-lab/results` and select an output path below that directory.
-
-For example, from Bash or WSL:
-
-```bash
-mkdir -p results
-docker run --rm \
-  --mount "type=bind,source=$(pwd)/results,target=/opt/openfhe-lab/results" \
-  openfhe-logreg:local \
-  --dataset logreg --refresh simulated --epochs 1 \
-  --output /opt/openfhe-lab/results/docker-smoke.csv
-```
-
-The dedicated `test` target builds the project and runs the complete CTest
-suite, including encrypted integration and real-bootstrapping tests:
+Build the image and run the full CTest suite:
 
 ```bash
 docker build --target test --tag openfhe-logreg:test .
 ```
 
-OpenFHE and project compilation default to two parallel jobs to avoid excessive
-memory use. Override that when the Docker host has sufficient resources:
+OpenFHE and project compilation use two parallel jobs by default to limit memory use.
+
+A host with more memory can use:
 
 ```bash
-docker build --build-arg BUILD_JOBS=4 --tag openfhe-logreg:local .
+docker build \
+  --build-arg BUILD_JOBS=4 \
+  --tag openfhe-logreg:local .
 ```
 
-## Run the comparison
+## Run experiments
 
-### Controlled gradient descent versus Nesterov accelerated gradient comparison
-
-Use the paired runner to compare convergence and runtime under identical data
-splits, initialization, learning rate, epoch count, datasets, and refresh
-methods.
-
-It preserves every raw per-epoch CSV and alternates whether GD or NAG runs
-first, reducing systematic warm-cache and first-run bias. With the default four
-repeats, each optimizer runs first twice, which gives a balanced result.
-
-For a short verification experiment:
-
-```bash
-REPEATS=4 EPOCHS=4 DATASET=all REFRESH=both \
-  ./scripts/run_gd_nag_comparison_wsl.sh
-```
-
-The defaults are `REPEATS=4`, `EPOCHS=100`, `MOMENTUM=0.1`,
-`LEARNING_RATE=0.01`, `DATASET=all`, and `REFRESH=both`.
-
-A full run includes real CKKS bootstrapping and can take a long time.
-`RESULT_DIR` selects an output directory; otherwise a timestamped directory is
-created under `results/`.
-
-Set `BUILD_AND_TEST=0` to reuse an existing successful build.
-
-Each result directory contains:
-
-- `raw/run_NNN_gd.csv` and `raw/run_NNN_nag.csv`: original per-epoch results;
-- `per_run_metrics.csv`: final/minimum loss, final accuracy, timing breakdown,
-  refresh count, CKKS levels, and encrypted/plaintext model error;
-- `per_run_comparison.csv`: fixed-epoch differences and the first NAG epoch/time
-  that reaches the matching GD run's final loss;
-- `aggregate_epoch_metrics.csv`: mean and sample standard deviation per epoch
-  for plotting loss/accuracy against epochs or cumulative training time;
-- `aggregate_optimizer_metrics.csv`: mean and sample standard deviation for
-  every optimizer metric;
-- `aggregate_comparison.csv`: mean GD/NAG differences, fixed-epoch runtime
-  ratio, target-loss success rate, epoch savings, and target-loss speedup.
-
-`experiment_config.csv` records the controlled inputs.
-
-Reported total time is the sum of encrypted arithmetic and optimizer-state
-refresh time; common context setup and data encryption are intentionally
-excluded. Metric decryption and the discarded paired-refresh measurement remain
-separate columns.
-
-In the comparison files, positive `nag_final_loss_improvement` means NAG has
-lower loss. Runtime ratios and speedups are `GD / NAG`, so values greater than
-one favor NAG.
-
-Test accuracy should be interpreted alongside loss because its discrete
-threshold can remain unchanged while optimization improves.
-
-Existing raw result pairs can be summarized again without rerunning OpenFHE:
-
-```bash
-python3 scripts/summarize_gd_nag.py \
-  --input-dir results/gd_nag_EXPERIMENT/raw \
-  --output-dir results/gd_nag_EXPERIMENT
-```
-
-See [`docs/GD_NAG_COMPARISON.md`](docs/GD_NAG_COMPARISON.md) for the controlled
-methodology and the checked-in two-repeat, four-epoch smoke measurement.
-
-See [`docs/NAG_STATE_PACKING_RESULTS.md`](docs/NAG_STATE_PACKING_RESULTS.md) for
-the preliminary separate-versus-packed NAG state measurements.
-
-The experiment retains the lab default of 100 epochs for both datasets and both
-refresh methods. Packing reduces the number of encrypted operations.
-
-For a four-epoch verification run covering both refresh methods:
+A short run with both datasets and refresh methods:
 
 ```bash
 EPOCHS=4 ./scripts/run_comparison_wsl.sh
 ```
 
-In the integration tests, the degree-59 circuit first bootstraps in epoch 2;
-the cubic circuit first bootstraps in epoch 3. Both then bootstrap after each
-subsequent epoch.
+The default script runs 100 epochs.
 
-From a fresh encryption, GD reaches consumed level 10 with Chebyshev or 6 with
-cubic. Further real-mode epochs consume 11 or 7 levels, respectively; nonzero
-NAG momentum adds one level after the first epoch.
-
-Refresh is triggered by actual consumed levels, not a fixed epoch number.
-
-Tests run through epoch 3 for Chebyshev and epoch 4 for cubic to verify training
-after the first real bootstrap.
-
-To run the lab's full 100 epochs:
+Direct examples:
 
 ```bash
-./scripts/run_comparison_wsl.sh
+./build/openfhe_lab_compare \
+  --dataset logreg \
+  --refresh both \
+  --epochs 4
 ```
-
-Direct executable examples:
 
 ```bash
-./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4
-./build/openfhe_lab_compare --dataset framingham --refresh both --epochs 4
+./build/openfhe_lab_compare \
+  --dataset framingham \
+  --refresh both \
+  --epochs 4
 ```
 
-For NAG with both refresh methods:
+Run NAG:
 
 ```bash
-./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 --optimizer nag --momentum 0.1
-
-./build/openfhe_lab_compare --dataset logreg --refresh both --epochs 4 \
-  --optimizer nag --momentum 0.1 --nag-packing packed
-
-# Both lab datasets:
-OPTIMIZER=nag MOMENTUM=0.1 NAG_PACKING=packed EPOCHS=4 \
-  ./scripts/run_comparison_wsl.sh
+./build/openfhe_lab_compare \
+  --dataset logreg \
+  --refresh both \
+  --epochs 4 \
+  --optimizer nag \
+  --momentum 0.1
 ```
 
-Options:
+Run NAG with one-ciphertext state packing:
+
+```bash
+./build/openfhe_lab_compare \
+  --dataset logreg \
+  --refresh both \
+  --epochs 4 \
+  --optimizer nag \
+  --momentum 0.1 \
+  --nag-packing packed
+```
+
+Use the Chebyshev sigmoid:
+
+```bash
+./build/openfhe_lab_compare \
+  --dataset logreg \
+  --refresh both \
+  --epochs 4 \
+  --sigmoid chebyshev
+```
+
+### CLI options
 
 ```text
 --dataset logreg|framingham|all
@@ -676,50 +607,75 @@ Options:
 --output PATH
 ```
 
-New measurements go to `results/benchmark_packed_<sigmoid>.csv` for GD or
-`results/benchmark_nag_<sigmoid>.csv` for separate NAG.
+## Controlled GD versus NAG comparison
 
-Packed NAG uses `results/benchmark_nag_packed_<sigmoid>.csv`, where
-`<sigmoid>` is `chebyshev` or `cubic`.
+The repository also provides a paired GD/NAG runner.
 
-Use `--output` with the executable or `OUTPUT_PATH` with the script to override
-the path. The script also accepts `SIGMOID` (default: `cubic`) and
-`NAG_PACKING` (default: `separate`).
+It keeps the dataset split, initialization, learning rate, epoch count, dataset, and refresh method the same for both optimizers.
 
-CSV rows include `optimizer`, the effective `momentum` (zero for GD), `sigmoid`,
-and `nag_packing`.
+It alternates which optimizer runs first. This reduces systematic first-run or warm-cache bias.
 
-Existing result files and reports are historical measurements. See
-[`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) for the earlier packed
-cubic-sigmoid GD run; [`docs/RESULTS.md`](docs/RESULTS.md) is the historical
-unpacked report.
+For a short experiment:
+
+```bash
+REPEATS=4 EPOCHS=4 DATASET=all REFRESH=both \
+  ./scripts/run_gd_nag_comparison_wsl.sh
+```
+
+The main defaults are:
+
+```text
+REPEATS=4
+EPOCHS=100
+MOMENTUM=0.1
+LEARNING_RATE=0.01
+DATASET=all
+REFRESH=both
+```
+
+Each optimizer runs first twice when `REPEATS=4`.
+
+The runner preserves raw per-epoch results and produces per-run and aggregate summaries.
+
+See [`docs/GD_NAG_COMPARISON.md`](docs/GD_NAG_COMPARISON.md) for the methodology and checked-in smoke results.
 
 ## Reported metrics
 
+CSV output includes:
+
 - encrypted arithmetic time;
 - refresh time;
-- training seconds per epoch (arithmetic plus refresh), excluding metrics and
-  the discarded paired-refresh measurement;
-- metric-only decryption time for the real-bootstrap branch;
+- total training time per epoch;
+- metric-only decryption time;
 - test accuracy;
 - exact-sigmoid training loss;
-- maximum encrypted-model error versus the matching plaintext epoch;
-- paired decrypt+encrypt time on the same worn model whenever a genuine real
-  bootstrap occurs;
-- maximum consumed CKKS level across the complete optimizer state before and
-  after refresh.
+- maximum encrypted-model error against the matching plaintext epoch;
+- paired simulated-refresh time at genuine bootstrap points;
+- CKKS level before and after refresh;
+- optimizer and momentum;
+- sigmoid approximation;
+- NAG packing mode.
 
-NAG arithmetic and refresh timings include both optimizer states, including
-mask/rotation extraction and repacking in packed mode.
+Context setup and input encryption are not included in per-epoch training time.
 
-The paired simulated-refresh measurement also refreshes a discarded copy of the
-complete selected state representation.
+Detailed timing definitions are in [`docs/DESIGN.md`](docs/DESIGN.md#timing-definitions).
+
+## Documentation
+
+More detailed material is kept outside the main README:
+
+- [`docs/DESIGN.md`](docs/DESIGN.md) — lab-to-OpenFHE mapping, packing layout, preprocessing, NAG state, refresh behavior, CKKS parameters, and timing definitions.
+- [`docs/GD_NAG_COMPARISON.md`](docs/GD_NAG_COMPARISON.md) — controlled GD/NAG comparison methodology and results.
+- [`docs/NAG_STATE_PACKING_RESULTS.md`](docs/NAG_STATE_PACKING_RESULTS.md) — separate-versus-packed NAG state measurements and correctness checks.
+- [`docs/PACKED_RESULTS.md`](docs/PACKED_RESULTS.md) — historical packed cubic-GD measurements.
+- [`docs/RESULTS.md`](docs/RESULTS.md) — historical unpacked measurements.
 
 ## Repository layout
 
 ```text
 .
-├── app/main.cpp
+├── app/
+│   └── main.cpp
 ├── data/
 │   ├── LogReg_sample_dataset.csv
 │   └── framingham.csv
@@ -729,7 +685,8 @@ complete selected state representation.
 │   ├── NAG_STATE_PACKING_RESULTS.md
 │   ├── PACKED_RESULTS.md
 │   └── RESULTS.md
-├── include/openfhe_lab/
+├── include/
+│   └── openfhe_lab/
 ├── results/
 │   ├── benchmark*.csv
 │   ├── nag_packed.csv
@@ -741,17 +698,19 @@ complete selected state representation.
 
 ## Security
 
-The default ring dimension is a laptop demonstration using `HEStd_NotSet`; it
-makes no production security claim.
+This is an educational and research-oriented experiment. It is not a production cryptographic system or medical prediction tool.
 
-Simulated bootstrapping explicitly exposes the model to the secret-key holder
-between epochs.
+The default ring dimension is 4,096 and uses `HEStd_NotSet`. It is a laptop-scale demonstration configuration and makes **no standard production-security claim**.
+
+Real `EvalBootstrap` refreshes encrypted state without exposing the model to the secret-key holder.
+
+Simulated bootstrapping decrypts the model and therefore crosses that confidentiality boundary.
 
 See [`SECURITY.md`](SECURITY.md).
 
 ## License
 
-Project code: MIT.
+Project code is released under the MIT License.
 
 Adapted packing and NAG portions retain their BSD-2-Clause notice.
 
